@@ -28,3 +28,17 @@ if (fs.existsSync("/app/.glitchdotcom.json")) {
     child_process.execSync(`unzip ./bin/fiftlib.zip -d ./bin/fiftlib`);
   }
 }
+
+// check if we're running on Vercel (Ubuntu 22) or another CI environment missing func
+const funcMissing = (() => { try { child_process.execSync("func -V"); return false; } catch { return true; } })();
+if (funcMissing && !fs.existsSync("bin/func")) {
+  const UBUNTU22_TAG = "ubuntu-22-0.4.6";
+  const BASE = `https://github.com/ton-defi-org/ton-binaries/releases/download/${UBUNTU22_TAG}`;
+  child_process.execSync(`mkdir -p bin`);
+  child_process.execSync(`wget -q ${BASE}/fift -O ./bin/fift`);
+  child_process.execSync(`chmod +x ./bin/fift`);
+  child_process.execSync(`wget -q ${BASE}/func -O ./bin/func`);
+  child_process.execSync(`chmod +x ./bin/func`);
+  child_process.execSync(`wget -q ${BASE}/fiftlib.zip -O ./bin/fiftlib.zip`);
+  child_process.execSync(`unzip -q ./bin/fiftlib.zip -d ./bin/fiftlib`);
+}
