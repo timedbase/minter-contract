@@ -47,6 +47,7 @@ function buildMinterInitData(owner: Address, metadataCell: Cell, walletCode: Cel
     .storeAddress(owner)
     .storeRef(metadataCell)
     .storeRef(walletCode)
+    .storeUint(1, 1) // mintable = true
     .endCell();
 }
 
@@ -66,6 +67,7 @@ function buildTaxMinterInitData(
     .storeUint(feeNumerator, 16)
     .storeUint(feeDenominator, 16)
     .storeAddress(feeCollector)
+    .storeUint(1, 1) // mintable = true
     .endCell();
 }
 
@@ -172,6 +174,14 @@ export function buildMintBody(to: Address, jettonAmount: bigint, adminAddr: Addr
     .endCell();
 }
 
+/** op 7: lock_mint — permanently disables minting, irreversible */
+export function buildLockMintBody(): Cell {
+  return beginCell()
+    .storeUint(7, 32)
+    .storeUint(0, 64)
+    .endCell();
+}
+
 /** op 3: change admin */
 export function buildChangeAdminBody(newAdmin: Address): Cell {
   return beginCell()
@@ -227,6 +237,7 @@ export function createTonClient(network: "mainnet" | "testnet"): TonClient {
 export interface MinterState {
   totalSupply: bigint;
   admin: Address;
+  mintable: boolean;
   isTaxJetton: boolean;
   feeNumerator?: number;
   feeDenominator?: number;
@@ -245,9 +256,10 @@ export async function loadMinterState(
   const jettonData = await client.runMethod(address, "get_jetton_data");
   const stack = jettonData.stack as TupleReader;
 
-  const totalSupply = stack.readBigNumber(); // stack[0]: total_supply
-  stack.readNumber();                        // stack[1]: mintable (-1 or 0)
-  const adminSlice = stack.readCell().beginParse(); // stack[2]: admin_address as cell
+  const totalSupply = stack.readBigNumber();           // stack[0]: total_supply
+  const mintableRaw = stack.readNumber();              // stack[1]: mintable (non-zero = true)
+  const mintable = mintableRaw !== 0;
+  const adminSlice = stack.readCell().beginParse();    // stack[2]: admin_address as cell
   const admin = adminSlice.loadAddress();
 
   // Try tax-specific method
@@ -272,6 +284,7 @@ export async function loadMinterState(
   return {
     totalSupply,
     admin,
+    mintable,
     isTaxJetton,
     feeNumerator,
     feeDenominator,

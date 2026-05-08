@@ -119,13 +119,15 @@ export function parseTokenMetadataCell(contentCell: Cell): {
 
 export function jettonMinterInitData(
   owner: Address,
-  metadata: { [s in JettonMetaDataKeys]?: string }
+  metadata: { [s in JettonMetaDataKeys]?: string },
+  mintable = true
 ): Cell {
   return beginCell()
     .storeCoins(0)
     .storeAddress(owner)
     .storeRef(buildTokenMetadataCell(metadata))
     .storeRef(JETTON_WALLET_CODE)
+    .storeUint(mintable ? 1 : 0, 1)
     .endCell();
 }
 

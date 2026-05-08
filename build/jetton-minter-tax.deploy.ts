@@ -76,7 +76,8 @@ export function jettonTaxMinterInitData(
   metadata: { [s in JettonMetaDataKeys]?: string },
   feeNumerator: number,
   feeDenominator: number,
-  feeCollector: Address
+  feeCollector: Address,
+  mintable = true
 ): Cell {
   if (feeDenominator === 0) throw new Error("feeDenominator must not be zero");
   if (feeNumerator * 20 > feeDenominator) throw new Error("Fee exceeds 5% maximum");
@@ -89,6 +90,7 @@ export function jettonTaxMinterInitData(
     .storeUint(feeNumerator, 16)
     .storeUint(feeDenominator, 16)
     .storeAddress(feeCollector)
+    .storeUint(mintable ? 1 : 0, 1)
     .endCell();
 }
 

@@ -9,6 +9,7 @@ import {
   buildChangeContentBody,
   buildSetFeesBody,
   buildPushFeeUpdateBody,
+  buildLockMintBody,
   cellToBase64,
   MinterState,
 } from "../lib/contracts";
@@ -23,7 +24,8 @@ type ActionTab =
   | "changeAdmin"
   | "changeContent"
   | "setFees"
-  | "pushFeeUpdate";
+  | "pushFeeUpdate"
+  | "lockMint";
 
 export default function ManagePage({ network }: ManagePageProps) {
   const [tonConnectUI] = useTonConnectUI();
@@ -63,6 +65,9 @@ export default function ManagePage({ network }: ManagePageProps) {
 
   // Push fee update form
   const [targetWallet, setTargetWallet] = useState("");
+
+  // Lock mint confirmation
+  const [lockMintConfirmed, setLockMintConfirmed] = useState(false);
 
   const isConnected = !!wallet;
 
@@ -223,6 +228,20 @@ export default function ManagePage({ network }: ManagePageProps) {
     }
   }
 
+  async function handleLockMint() {
+    if (!lockMintConfirmed) return;
+    setTxStatus({ type: "loading", message: "Sending lock mint transaction..." });
+    try {
+      const body = buildLockMintBody();
+      await sendTx(cellToBase64(body), toNano("0.05").toString());
+      setTxStatus({ type: "success", message: "Mint authority permanently revoked." });
+      setLockMintConfirmed(false);
+      if (minterState) setMinterState({ ...minterState, mintable: false });
+    } catch (err) {
+      handleTxError(err);
+    }
+  }
+
   function handleTxError(err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes("User rejecte") || message.includes("Reject")) {
@@ -248,7 +267,7 @@ export default function ManagePage({ network }: ManagePageProps) {
   }
 
   const availableTabs: { id: ActionTab; label: string }[] = [
-    { id: "mint", label: "Mint" },
+    ...(minterState?.mintable ? [{ id: "mint" as ActionTab, label: "Mint" }] : []),
     { id: "changeAdmin", label: "Change Admin" },
     { id: "changeContent", label: "Change Content" },
     ...(minterState?.isTaxJetton
@@ -257,6 +276,7 @@ export default function ManagePage({ network }: ManagePageProps) {
           { id: "pushFeeUpdate" as ActionTab, label: "Push Fee Update" },
         ]
       : []),
+    ...(minterState?.mintable ? [{ id: "lockMint" as ActionTab, label: "🔒 Lock Mint" }] : []),
   ];
 
   return (
@@ -319,6 +339,16 @@ export default function ManagePage({ network }: ManagePageProps) {
                 <span className={`state-value badge ${minterState.isTaxJetton ? "badge-tax" : "badge-standard"}`}>
                   {minterState.isTaxJetton ? "Tax Jetton" : "Standard Jetton"}
                 </span>
+              </div>
+              <div className="state-item">
+                <span className="state-label">Mint Authority</span>
+                <span className={`state-value badge ${minterState.mintable ? "badge-standard" : "badge-revoked"}`}>
+                  {minterState.mintable ? "Active" : "Permanently Revoked"}
+                </span>
+              </div>
+              <div className="state-item">
+                <span className="state-label">Freeze Key</span>
+                <span className="state-value badge badge-revoked">None</span>
               </div>
               {minterState.isTaxJetton && (
                 <>
@@ -548,6 +578,30 @@ export default function ManagePage({ network }: ManagePageProps) {
                     disabled={!isConnected || txStatus.type === "loading"}
                   >
                     {txStatus.type === "loading" ? "Sending..." : "Push Fee Update"}
+                  </button>
+                </div>
+              )}
+
+              {activeAction === "lockMint" && minterState.mintable && (
+                <div className="action-form">
+                  <div className="lock-mint-warning">
+                    <strong>⚠ This action is permanent and irreversible.</strong>
+                    <p>Once mint authority is revoked, no new tokens can ever be created — not even by the admin. The total supply will be fixed forever.</p>
+                  </div>
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={lockMintConfirmed}
+                      onChange={(e) => setLockMintConfirmed(e.target.checked)}
+                    />
+                    I understand this cannot be undone
+                  </label>
+                  <button
+                    className="btn-danger"
+                    onClick={handleLockMint}
+                    disabled={!isConnected || !lockMintConfirmed || txStatus.type === "loading"}
+                  >
+                    {txStatus.type === "loading" ? "Sending..." : "Permanently Revoke Mint Authority"}
                   </button>
                 </div>
               )}
