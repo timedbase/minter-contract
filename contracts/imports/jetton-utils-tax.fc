@@ -1,0 +1,61 @@
+;; Tax Jetton wallet utilities.
+;;
+;; CRITICAL DESIGN: fee params are NOT embedded in wallet address derivation.
+;; calculate_tax_jetton_wallet_state_init always uses canonical defaults
+;; (fee_numerator=0, fee_denominator=1, fee_collector=addr_none) for the init_data
+;; that determines the wallet address. Actual fee params are stored only in
+;; wallet runtime storage and are set/updated via op::update_wallet_fees.
+;;
+;; This guarantees wallet addresses never change when fees are updated, so:
+;;   - burn_notification verification always succeeds
+;;   - provide_wallet_address always returns the correct wallet
+;;   - inter-wallet transfers always route to the correct address
+
+cell pack_tax_jetton_wallet_data(
+    int balance,
+    slice owner_address,
+    slice jetton_master_address,
+    cell jetton_wallet_code,
+    int fee_numerator,
+    int fee_denominator,
+    slice fee_collector
+) inline {
+    return begin_cell()
+            .store_coins(balance)
+            .store_slice(owner_address)
+            .store_slice(jetton_master_address)
+            .store_ref(jetton_wallet_code)
+            .store_uint(fee_numerator, 16)
+            .store_uint(fee_denominator, 16)
+            .store_slice(fee_collector)
+           .end_cell();
+}
+
+;; Address derivation uses canonical fee defaults so the address is fee-param-independent.
+;; addr_none (b{00}) as fee_collector; fee_numerator=0 means no fee before params are set.
+cell calculate_tax_jetton_wallet_state_init(
+    slice owner_address,
+    slice jetton_master_address,
+    cell jetton_wallet_code
+) inline {
+    slice addr_none = begin_cell().store_uint(0, 2).end_cell().begin_parse();
+    return begin_cell()
+            .store_uint(0, 2)
+            .store_dict(jetton_wallet_code)
+            .store_dict(pack_tax_jetton_wallet_data(
+                0, owner_address, jetton_master_address, jetton_wallet_code,
+                0, 1, addr_none
+            ))
+            .store_uint(0, 1)
+           .end_cell();
+}
+
+slice calculate_user_tax_jetton_wallet_address(
+    slice owner_address,
+    slice jetton_master_address,
+    cell jetton_wallet_code
+) inline {
+    return calculate_jetton_wallet_address(
+        calculate_tax_jetton_wallet_state_init(owner_address, jetton_master_address, jetton_wallet_code)
+    );
+}

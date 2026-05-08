@@ -1,0 +1,301 @@
+;; Tax Jetton Wallet Smart Contract
+;; Deducts a transfer fee on every outgoing transfer and routes it to the fee collector.
+
+#include "imports/stdlib.fc";
+#include "imports/params.fc";
+#include "imports/constants.fc";
+#include "imports/jetton-utils.fc";
+#include "imports/jetton-utils-tax.fc";
+#include "imports/op-codes.fc";
+#include "imports/utils.fc";
+#pragma version >=0.2.0;
+
+{-
+  storage#_ balance:Coins owner_address:MsgAddressInt jetton_master_address:MsgAddressInt
+            jetton_wallet_code:^Cell fee_numerator:uint16 fee_denominator:uint16
+            fee_collector:MsgAddressInt = Storage;
+-}
+
+const min_tons_for_storage = 10000000; ;; 0.01 TON
+const gas_consumption = 10000000;      ;; 0.01 TON
+
+int op::update_wallet_fees() asm "6 PUSHINT";
+
+(int, slice, slice, cell, int, int, slice) load_data() inline {
+    slice ds = get_data().begin_parse();
+    return (
+        ds~load_coins(),
+        ds~load_msg_addr(),
+        ds~load_msg_addr(),
+        ds~load_ref(),
+        ds~load_uint(16),
+        ds~load_uint(16),
+        ds~load_msg_addr()
+    );
+}
+
+() save_data(int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code,
+             int fee_numerator, int fee_denominator, slice fee_collector) impure inline {
+    set_data(pack_tax_jetton_wallet_data(
+        balance, owner_address, jetton_master_address, jetton_wallet_code,
+        fee_numerator, fee_denominator, fee_collector
+    ));
+}
+
+() send_tokens(slice in_msg_body, slice sender_address, int msg_value, int fwd_fee) impure {
+    int query_id = in_msg_body~load_uint(64);
+    int jetton_amount = in_msg_body~load_coins();
+    slice to_owner_address = in_msg_body~load_msg_addr();
+    force_chain(to_owner_address);
+
+    (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code,
+     int fee_numerator, int fee_denominator, slice fee_collector) = load_data();
+
+    balance -= jetton_amount;
+    throw_unless(705, equal_slices(owner_address, sender_address));
+    throw_unless(706, balance >= 0);
+
+    int fee_amount = 0;
+    if (fee_numerator > 0) {
+        fee_amount = muldiv(jetton_amount, fee_numerator, fee_denominator);
+    }
+    int net_amount = jetton_amount - fee_amount;
+    throw_unless(706, net_amount > 0);
+
+    slice response_address = in_msg_body~load_msg_addr();
+    cell custom_payload = in_msg_body~load_dict();
+    int forward_ton_amount = in_msg_body~load_coins();
+    throw_unless(708, slice_bits(in_msg_body) >= 1);
+    slice either_forward_payload = in_msg_body;
+
+    ;; TON required: standard check + extra leg for fee transfer (if any)
+    int fee_ton = 0;
+    if (fee_amount > 0) {
+        fee_ton = gas_consumption + min_tons_for_storage + fwd_fee;
+    }
+    int fwd_count = forward_ton_amount ? 2 : 1;
+    throw_unless(709, msg_value >
+                       forward_ton_amount +
+                       fwd_count * fwd_fee +
+                       (2 * gas_consumption + min_tons_for_storage) +
+                       fee_ton);
+
+    ;; Send fee tokens to fee collector's wallet (mode 1 = pay TON fees separately from balance)
+    if (fee_amount > 0) {
+        cell fee_state_init = calculate_tax_jetton_wallet_state_init(
+            fee_collector, jetton_master_address, jetton_wallet_code
+        );
+        slice fee_wallet_address = calculate_jetton_wallet_address(fee_state_init);
+        var fee_msg_body = begin_cell()
+            .store_uint(op::internal_transfer(), 32)
+            .store_uint(query_id, 64)
+            .store_coins(fee_amount)
+            .store_slice(owner_address)
+            .store_slice(owner_address) ;; response back to sender
+            .store_coins(0)
+            .store_uint(0, 1)
+            .end_cell();
+        var fee_msg = begin_cell()
+            .store_uint(0x18, 6)
+            .store_slice(fee_wallet_address)
+            .store_coins(fee_ton)
+            .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
+            .store_ref(fee_state_init)
+            .store_ref(fee_msg_body);
+        send_raw_message(fee_msg.end_cell(), 1);
+    }
+
+    ;; Send net tokens to recipient's wallet (mode 64 = carry remaining incoming value)
+    cell to_state_init = calculate_tax_jetton_wallet_state_init(
+        to_owner_address, jetton_master_address, jetton_wallet_code
+    );
+    slice to_wallet_address = calculate_jetton_wallet_address(to_state_init);
+    var msg_body = begin_cell()
+        .store_uint(op::internal_transfer(), 32)
+        .store_uint(query_id, 64)
+        .store_coins(net_amount)
+        .store_slice(owner_address)
+        .store_slice(response_address)
+        .store_coins(forward_ton_amount)
+        .store_slice(either_forward_payload)
+        .end_cell();
+    var msg = begin_cell()
+        .store_uint(0x18, 6)
+        .store_slice(to_wallet_address)
+        .store_coins(0)
+        .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
+        .store_ref(to_state_init)
+        .store_ref(msg_body);
+    send_raw_message(msg.end_cell(), 64);
+
+    save_data(balance, owner_address, jetton_master_address, jetton_wallet_code,
+              fee_numerator, fee_denominator, fee_collector);
+}
+
+() receive_tokens(slice in_msg_body, slice sender_address, int my_ton_balance, int fwd_fee, int msg_value) impure {
+    (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code,
+     int fee_numerator, int fee_denominator, slice fee_collector) = load_data();
+
+    int query_id = in_msg_body~load_uint(64);
+    int jetton_amount = in_msg_body~load_coins();
+    balance += jetton_amount;
+    slice from_address = in_msg_body~load_msg_addr();
+    slice response_address = in_msg_body~load_msg_addr();
+
+    ;; sender must be the master or another tax wallet for the same token
+    throw_unless(707,
+        equal_slices(jetton_master_address, sender_address)
+        |
+        equal_slices(
+            calculate_user_tax_jetton_wallet_address(from_address, jetton_master_address, jetton_wallet_code),
+            sender_address
+        )
+    );
+
+    int forward_ton_amount = in_msg_body~load_coins();
+    int ton_balance_before_msg = my_ton_balance - msg_value;
+    int storage_fee = min_tons_for_storage - min(ton_balance_before_msg, min_tons_for_storage);
+    msg_value -= (storage_fee + gas_consumption);
+
+    if (forward_ton_amount) {
+        msg_value -= (forward_ton_amount + fwd_fee);
+        slice either_forward_payload = in_msg_body;
+        var msg_body = begin_cell()
+            .store_uint(op::transfer_notification(), 32)
+            .store_uint(query_id, 64)
+            .store_coins(jetton_amount)
+            .store_slice(from_address)
+            .store_slice(either_forward_payload)
+            .end_cell();
+        var msg = begin_cell()
+            .store_uint(0x10, 6)
+            .store_slice(owner_address)
+            .store_coins(forward_ton_amount)
+            .store_uint(1, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+            .store_ref(msg_body);
+        send_raw_message(msg.end_cell(), 1);
+    }
+
+    if ((response_address.preload_uint(2) != 0) & (msg_value > 0)) {
+        var msg = begin_cell()
+            .store_uint(0x10, 6)
+            .store_slice(response_address)
+            .store_coins(msg_value)
+            .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+            .store_uint(op::excesses(), 32)
+            .store_uint(query_id, 64);
+        send_raw_message(msg.end_cell(), 2);
+    }
+
+    save_data(balance, owner_address, jetton_master_address, jetton_wallet_code,
+              fee_numerator, fee_denominator, fee_collector);
+}
+
+() burn_tokens(slice in_msg_body, slice sender_address, int msg_value, int fwd_fee) impure {
+    (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code,
+     int fee_numerator, int fee_denominator, slice fee_collector) = load_data();
+
+    int query_id = in_msg_body~load_uint(64);
+    int jetton_amount = in_msg_body~load_coins();
+    slice response_address = in_msg_body~load_msg_addr();
+    balance -= jetton_amount;
+
+    throw_unless(705, equal_slices(owner_address, sender_address));
+    throw_unless(706, balance >= 0);
+    throw_unless(707, msg_value > fwd_fee + 2 * gas_consumption);
+
+    var msg_body = begin_cell()
+        .store_uint(op::burn_notification(), 32)
+        .store_uint(query_id, 64)
+        .store_coins(jetton_amount)
+        .store_slice(owner_address)
+        .store_slice(response_address)
+        .end_cell();
+    var msg = begin_cell()
+        .store_uint(0x18, 6)
+        .store_slice(jetton_master_address)
+        .store_coins(0)
+        .store_uint(1, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+        .store_ref(msg_body);
+    send_raw_message(msg.end_cell(), 64);
+
+    save_data(balance, owner_address, jetton_master_address, jetton_wallet_code,
+              fee_numerator, fee_denominator, fee_collector);
+}
+
+() on_bounce(slice in_msg_body) impure {
+    in_msg_body~skip_bits(32);
+    (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code,
+     int fee_numerator, int fee_denominator, slice fee_collector) = load_data();
+    int op = in_msg_body~load_uint(32);
+    throw_unless(709, (op == op::internal_transfer()) | (op == op::burn_notification()));
+    int query_id = in_msg_body~load_uint(64);
+    int jetton_amount = in_msg_body~load_coins();
+    balance += jetton_amount;
+    save_data(balance, owner_address, jetton_master_address, jetton_wallet_code,
+              fee_numerator, fee_denominator, fee_collector);
+}
+
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+    if (in_msg_body.slice_empty?()) {
+        return ();
+    }
+    slice cs = in_msg_full.begin_parse();
+    int flags = cs~load_uint(4);
+    if (flags & 1) {
+        on_bounce(in_msg_body);
+        return ();
+    }
+    slice sender_address = cs~load_msg_addr();
+    cs~load_msg_addr();
+    cs~load_coins();
+    cs~skip_bits(1);
+    cs~load_coins();
+    int fwd_fee = muldiv(cs~load_coins(), 3, 2);
+
+    int op = in_msg_body~load_uint(32);
+
+    if (op == op::transfer()) {
+        send_tokens(in_msg_body, sender_address, msg_value, fwd_fee);
+        return ();
+    }
+
+    if (op == op::internal_transfer()) {
+        receive_tokens(in_msg_body, sender_address, my_balance, fwd_fee, msg_value);
+        return ();
+    }
+
+    if (op == op::burn()) {
+        burn_tokens(in_msg_body, sender_address, msg_value, fwd_fee);
+        return ();
+    }
+
+    ;; Master can push updated fee params to this wallet
+    if (op == op::update_wallet_fees()) {
+        (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code,
+         int fee_numerator, int fee_denominator, slice fee_collector) = load_data();
+        throw_unless(73, equal_slices(jetton_master_address, sender_address));
+        int new_fee_numerator = in_msg_body~load_uint(16);
+        int new_fee_denominator = in_msg_body~load_uint(16);
+        slice new_fee_collector = in_msg_body~load_msg_addr();
+        throw_unless(76, new_fee_denominator > 0);
+        throw_unless(76, new_fee_numerator * 20 <= new_fee_denominator);
+        save_data(balance, owner_address, jetton_master_address, jetton_wallet_code,
+                  new_fee_numerator, new_fee_denominator, new_fee_collector);
+        return ();
+    }
+
+    throw(0xffff);
+}
+
+(int, slice, slice, cell) get_wallet_data() method_id {
+    (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code,
+     int fee_numerator, int fee_denominator, slice fee_collector) = load_data();
+    return (balance, owner_address, jetton_master_address, jetton_wallet_code);
+}
+
+(int, int, slice) get_fee_params() method_id {
+    (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code,
+     int fee_numerator, int fee_denominator, slice fee_collector) = load_data();
+    return (fee_numerator, fee_denominator, fee_collector);
+}
