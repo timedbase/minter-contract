@@ -1,20 +1,20 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { nodePolyfills } from "vite-plugin-node-polyfills";
 import { resolve } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    nodePolyfills({ include: ["buffer", "process"] }),
+    react(),
+  ],
   resolve: {
     alias: {
       "@contracts": resolve(__dirname, "../build"),
     },
-  },
-  define: {
-    // Required by some TON libraries that use Node.js globals
-    global: "globalThis",
   },
   build: {
     chunkSizeWarningLimit: 1500,
