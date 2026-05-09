@@ -43,9 +43,8 @@ export function getTaxWalletCode(): Cell {
 
 function buildMinterInitData(owner: Address, metadataCell: Cell, walletCode: Cell): Cell {
   return beginCell()
-    .storeCoins(0n)    // total_supply = 0; set by genesis (op 7)
+    .storeCoins(0n)  // total_supply = 0; set by genesis (op 7)
     .storeAddress(owner)
-    .storeUint(1, 1)   // mintable = true
     .storeRef(metadataCell)
     .storeRef(walletCode)
     .endCell();
@@ -60,14 +59,13 @@ function buildTaxMinterInitData(
   feeCollector: Address
 ): Cell {
   return beginCell()
-    .storeCoins(0n)    // total_supply = 0; set by genesis (op 7)
+    .storeCoins(0n)  // total_supply = 0; set by genesis (op 7)
     .storeAddress(owner)
     .storeRef(metadataCell)
     .storeRef(walletCode)
     .storeUint(feeNumerator, 16)
     .storeUint(feeDenominator, 16)
     .storeAddress(feeCollector)
-    .storeUint(1, 1)   // mintable = true
     .endCell();
 }
 
@@ -252,7 +250,6 @@ export function createTonClient(network: "mainnet" | "testnet"): TonClient {
 
 export interface MinterState {
   totalSupply: bigint;
-  mintable: boolean;
   admin: Address;
   isTaxJetton: boolean;
   feeNumerator?: number;
@@ -272,10 +269,9 @@ export async function loadMinterState(
   const jettonData = await client.runMethod(address, "get_jetton_data");
   const stack = jettonData.stack as TupleReader;
 
-  const totalSupply = stack.readBigNumber();          // stack[0]: total_supply
-  const mintableInt = stack.readBigNumber();           // stack[1]: mintable (-1 = true, 0 = false)
-  const mintable = mintableInt !== 0n;
-  const adminSlice = stack.readCell().beginParse();    // stack[2]: admin_address as cell
+  const totalSupply = stack.readBigNumber();   // stack[0]: total_supply
+  stack.skip(1);                               // stack[1]: mintable — always 0, skip
+  const adminSlice = stack.readCell().beginParse(); // stack[2]: admin_address
   const admin = adminSlice.loadAddress();
 
   // Try tax-specific method
@@ -299,7 +295,6 @@ export async function loadMinterState(
 
   return {
     totalSupply,
-    mintable,
     admin,
     isTaxJetton,
     feeNumerator,

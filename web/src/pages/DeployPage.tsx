@@ -4,7 +4,7 @@ import { Address, toNano } from "@ton/core";
 import {
   getStandardDeployParams,
   getTaxDeployParams,
-  buildMintBody,
+  buildGenesisBody,
   cellToBase64,
 } from "../lib/contracts";
 import type { JettonMetadata } from "../lib/metadata";
@@ -16,8 +16,8 @@ interface DeployPageProps {
 type JettonType = "standard" | "tax";
 
 const DEPLOY_MINTER_FEE = "0.05";  // stateInit deploy
-const GENESIS_FEE_STANDARD = "0.10"; // op::mint + deploy jetton wallet
-const GENESIS_FEE_TAX = "0.15";      // op::mint + deploy jetton wallet + push fee params
+const GENESIS_FEE_STANDARD = "0.10"; // genesis + deploy jetton wallet
+const GENESIS_FEE_TAX = "0.15";      // genesis + deploy jetton wallet + push fee params
 
 interface FormState {
   name: string;
@@ -128,15 +128,16 @@ export default function DeployPage({ network }: DeployPageProps) {
       }
 
       const contractAddr = deployParams.address.toString({ bounceable: true });
-      const mintBody = buildMintBody(ownerAddress, jettonAmount, ownerAddress);
+      const genesisBody = buildGenesisBody(ownerAddress, jettonAmount, ownerAddress);
 
       setStatus({ type: "loading", message: `Sending deploy transaction to ${contractAddr}...` });
 
-      const mintFee = form.jettonType === "tax" ? GENESIS_FEE_TAX : GENESIS_FEE_STANDARD;
+      const genesisFee = form.jettonType === "tax" ? GENESIS_FEE_TAX : GENESIS_FEE_STANDARD;
 
       // Two messages in one transaction:
-      //   1. Deploy the minter contract (stateInit, no body)
-      //   2. op::mint — distributes the initial supply to the admin's wallet
+      //   1. Deploy the minter contract (stateInit, total_supply=0)
+      //   2. op::genesis (op 7) — one-time mint of the form supply to the admin wallet.
+      //      On-chain guard: throws error 78 if total_supply != 0, so supply is fixed forever.
       await tonConnectUI.sendTransaction({
         validUntil: Math.floor(Date.now() / 1000) + 360,
         messages: [
@@ -147,8 +148,8 @@ export default function DeployPage({ network }: DeployPageProps) {
           },
           {
             address: contractAddr,
-            amount: toNano(mintFee).toString(),
-            payload: cellToBase64(mintBody),
+            amount: toNano(genesisFee).toString(),
+            payload: cellToBase64(genesisBody),
           },
         ],
       });
@@ -348,7 +349,7 @@ export default function DeployPage({ network }: DeployPageProps) {
           </div>
           <div className="fee-line">
             <span className="fee-label">
-              Mint initial supply{form.jettonType === "tax" ? " + push fee params" : ""}
+              Genesis: mint initial supply{form.jettonType === "tax" ? " + init fee params" : ""}
             </span>
             <span className="fee-amount">
               {form.jettonType === "tax" ? GENESIS_FEE_TAX : GENESIS_FEE_STANDARD} TON
