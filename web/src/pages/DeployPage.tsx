@@ -15,6 +15,10 @@ interface DeployPageProps {
 
 type JettonType = "standard" | "tax";
 
+const DEPLOY_MINTER_FEE = "0.05";   // stateInit deploy
+const GENESIS_FEE_STANDARD = "0.10"; // mint + deploy jetton wallet
+const GENESIS_FEE_TAX = "0.15";      // mint + deploy jetton wallet + push fee params
+
 interface FormState {
   name: string;
   symbol: string;
@@ -128,6 +132,8 @@ export default function DeployPage({ network }: DeployPageProps) {
 
       setStatus({ type: "loading", message: `Sending deploy transaction to ${contractAddr}...` });
 
+      const genesisFee = form.jettonType === "tax" ? GENESIS_FEE_TAX : GENESIS_FEE_STANDARD;
+
       // Two messages in one transaction:
       //   1. Deploy the minter contract (stateInit, no body)
       //   2. Genesis: distribute the fixed initial supply to the admin
@@ -137,12 +143,12 @@ export default function DeployPage({ network }: DeployPageProps) {
         messages: [
           {
             address: contractAddr,
-            amount: toNano("0.05").toString(),
+            amount: toNano(DEPLOY_MINTER_FEE).toString(),
             stateInit: deployParams.stateInitBoc,
           },
           {
             address: contractAddr,
-            amount: toNano("0.1").toString(),
+            amount: toNano(genesisFee).toString(),
             payload: cellToBase64(genesisBody),
           },
         ],
@@ -331,6 +337,33 @@ export default function DeployPage({ network }: DeployPageProps) {
             value={form.adminAddress}
             onChange={(e) => updateField("adminAddress", e.target.value)}
           />
+        </div>
+      </div>
+
+      <div className="card fee-summary">
+        <h3 className="card-title">Deployment Cost</h3>
+        <div className="fee-breakdown">
+          <div className="fee-line">
+            <span className="fee-label">Deploy minter contract</span>
+            <span className="fee-amount">{DEPLOY_MINTER_FEE} TON</span>
+          </div>
+          <div className="fee-line">
+            <span className="fee-label">
+              Mint initial supply{form.jettonType === "tax" ? " + push fee params" : ""}
+            </span>
+            <span className="fee-amount">
+              {form.jettonType === "tax" ? GENESIS_FEE_TAX : GENESIS_FEE_STANDARD} TON
+            </span>
+          </div>
+          <div className="fee-line fee-total">
+            <span className="fee-label">Total (excess returned)</span>
+            <span className="fee-amount">
+              {(
+                parseFloat(DEPLOY_MINTER_FEE) +
+                parseFloat(form.jettonType === "tax" ? GENESIS_FEE_TAX : GENESIS_FEE_STANDARD)
+              ).toFixed(2)} TON
+            </span>
+          </div>
         </div>
       </div>
 

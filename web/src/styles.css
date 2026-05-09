@@ -411,6 +411,42 @@ html, body {
   color: var(--accent);
 }
 
+.fee-summary {
+  border-color: var(--accent);
+}
+
+.fee-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fee-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+}
+
+.fee-line.fee-total {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  margin-top: 4px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.fee-amount {
+  font-family: var(--font-mono);
+  color: var(--accent);
+  font-size: 0.88rem;
+}
+
+.fee-line.fee-total .fee-amount {
+  font-size: 0.95rem;
+}
+
 /* ── Status messages ─────────────────────────────────────────────────────── */
 .status-message {
   display: flex;
