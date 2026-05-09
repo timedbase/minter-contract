@@ -2,11 +2,11 @@
 ;; Extends standard minter with fee_numerator, fee_denominator, fee_collector.
 ;; Max configurable fee is 5% (fee_numerator * 20 <= fee_denominator).
 ;;
-;; Fee params are set at deployment and are IMMUTABLE (no op to change them).
 ;; op 7   (genesis):   one-time initial supply (only when total_supply == 0).
 ;; op 21  (mint):      admin can mint more tokens while mintable == 1.
 ;; op 8   (lock_mint): admin permanently revokes minting.
-;; op 6   (push_fee):  push current fee params to a specific wallet (operational).
+;; op 5   (set_fees):  admin can update fee params (max 5%).
+;; op 6   (push_fee):  push current fee params to a specific wallet.
 
 ;; storage#_ total_supply:Coins admin_address:MsgAddress content:^Cell
 ;;            jetton_wallet_code:^Cell fee_numerator:uint16 fee_denominator:uint16
@@ -214,6 +214,18 @@ int op::update_wallet_fees() asm "6 PUSHINT";
         throw_unless(73, equal_slices(sender_address, admin_address));
         save_data(total_supply, admin_address, in_msg_body~load_ref(), jetton_wallet_code,
                   fee_numerator, fee_denominator, fee_collector, mintable);
+        return ();
+    }
+
+    if (op == 5) { ;; set fees — max 5%: fee_numerator * 20 <= fee_denominator
+        throw_unless(73, equal_slices(sender_address, admin_address));
+        int new_fee_numerator = in_msg_body~load_uint(16);
+        int new_fee_denominator = in_msg_body~load_uint(16);
+        slice new_fee_collector = in_msg_body~load_msg_addr();
+        throw_unless(76, new_fee_denominator > 0);
+        throw_unless(76, new_fee_numerator * 20 <= new_fee_denominator);
+        save_data(total_supply, admin_address, content, jetton_wallet_code,
+                  new_fee_numerator, new_fee_denominator, new_fee_collector, mintable);
         return ();
     }
 

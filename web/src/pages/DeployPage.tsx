@@ -4,7 +4,7 @@ import { Address, toNano } from "@ton/core";
 import {
   getStandardDeployParams,
   getTaxDeployParams,
-  buildGenesisBody,
+  buildMintBody,
   cellToBase64,
 } from "../lib/contracts";
 import type { JettonMetadata } from "../lib/metadata";
@@ -15,9 +15,9 @@ interface DeployPageProps {
 
 type JettonType = "standard" | "tax";
 
-const DEPLOY_MINTER_FEE = "0.05";   // stateInit deploy
-const GENESIS_FEE_STANDARD = "0.10"; // mint + deploy jetton wallet
-const GENESIS_FEE_TAX = "0.15";      // mint + deploy jetton wallet + push fee params
+const DEPLOY_MINTER_FEE = "0.05";  // stateInit deploy
+const GENESIS_FEE_STANDARD = "0.10"; // op::mint + deploy jetton wallet
+const GENESIS_FEE_TAX = "0.15";      // op::mint + deploy jetton wallet + push fee params
 
 interface FormState {
   name: string;
@@ -43,7 +43,7 @@ export default function DeployPage({ network }: DeployPageProps) {
     image: "",
     jettonType: "standard",
     initialSupply: "",
-    feeNumerator: "20",
+    feeNumerator: "30",
     feeDenominator: "1000",
     feeCollector: "",
     adminAddress: "",
@@ -128,16 +128,15 @@ export default function DeployPage({ network }: DeployPageProps) {
       }
 
       const contractAddr = deployParams.address.toString({ bounceable: true });
-      const genesisBody = buildGenesisBody(ownerAddress, jettonAmount, ownerAddress);
+      const mintBody = buildMintBody(ownerAddress, jettonAmount, ownerAddress);
 
       setStatus({ type: "loading", message: `Sending deploy transaction to ${contractAddr}...` });
 
-      const genesisFee = form.jettonType === "tax" ? GENESIS_FEE_TAX : GENESIS_FEE_STANDARD;
+      const mintFee = form.jettonType === "tax" ? GENESIS_FEE_TAX : GENESIS_FEE_STANDARD;
 
       // Two messages in one transaction:
       //   1. Deploy the minter contract (stateInit, no body)
-      //   2. Genesis: distribute the fixed initial supply to the admin
-      // On-chain: op 7 throws error 78 if total_supply != 0, so supply can never be inflated.
+      //   2. op::mint — distributes the initial supply to the admin's wallet
       await tonConnectUI.sendTransaction({
         validUntil: Math.floor(Date.now() / 1000) + 360,
         messages: [
@@ -148,14 +147,14 @@ export default function DeployPage({ network }: DeployPageProps) {
           },
           {
             address: contractAddr,
-            amount: toNano(genesisFee).toString(),
-            payload: cellToBase64(genesisBody),
+            amount: toNano(mintFee).toString(),
+            payload: cellToBase64(mintBody),
           },
         ],
       });
 
       setDeployedAddress(contractAddr);
-      setStatus({ type: "success", message: "Contract deployed with fixed supply!" });
+      setStatus({ type: "success", message: "Contract deployed successfully!" });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (message.includes("User rejecte") || message.includes("Reject")) {
