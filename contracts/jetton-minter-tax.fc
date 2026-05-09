@@ -2,12 +2,15 @@
 ;; Extends standard minter with fee_numerator, fee_denominator, fee_collector.
 ;; Max configurable fee is 5% (fee_numerator * 20 <= fee_denominator).
 ;;
-;; Supply is fixed at creation via op 7 (genesis).
-;; op 7 can only be called once (when total_supply == 0).  There is no op::mint.
+;; Fee params are set at deployment and are IMMUTABLE (no op to change them).
+;; op 7   (genesis):   one-time initial supply (only when total_supply == 0).
+;; op 21  (mint):      admin can mint more tokens while mintable == 1.
+;; op 8   (lock_mint): admin permanently revokes minting.
+;; op 6   (push_fee):  push current fee params to a specific wallet (operational).
 
 ;; storage#_ total_supply:Coins admin_address:MsgAddress content:^Cell
 ;;            jetton_wallet_code:^Cell fee_numerator:uint16 fee_denominator:uint16
-;;            fee_collector:MsgAddress = Storage;
+;;            fee_collector:MsgAddress mintable:uint1 = Storage;
 
 #include "imports/stdlib.fc";
 #include "imports/params.fc";
@@ -21,7 +24,7 @@
 
 int op::update_wallet_fees() asm "6 PUSHINT";
 
-(int, slice, cell, cell, int, int, slice) load_data() inline {
+(int, slice, cell, cell, int, int, slice, int) load_data() inline {
     slice ds = get_data().begin_parse();
     int total_supply = ds~load_coins();
     slice admin_address = ds~load_msg_addr();
@@ -30,14 +33,14 @@ int op::update_wallet_fees() asm "6 PUSHINT";
     int fee_numerator = ds~load_uint(16);
     int fee_denominator = ds~load_uint(16);
     slice fee_collector = ds~load_msg_addr();
-    ;; On-chain enforcement: catches bad initData on the very first message
+    int mintable = ds~load_uint(1);
     throw_unless(76, fee_denominator > 0);
     throw_unless(76, fee_numerator * 20 <= fee_denominator);
-    return (total_supply, admin_address, content, jetton_wallet_code, fee_numerator, fee_denominator, fee_collector);
+    return (total_supply, admin_address, content, jetton_wallet_code, fee_numerator, fee_denominator, fee_collector, mintable);
 }
 
 () save_data(int total_supply, slice admin_address, cell content, cell jetton_wallet_code,
-             int fee_numerator, int fee_denominator, slice fee_collector) impure inline {
+             int fee_numerator, int fee_denominator, slice fee_collector, int mintable) impure inline {
     set_data(begin_cell()
         .store_coins(total_supply)
         .store_slice(admin_address)
@@ -46,12 +49,13 @@ int op::update_wallet_fees() asm "6 PUSHINT";
         .store_uint(fee_numerator, 16)
         .store_uint(fee_denominator, 16)
         .store_slice(fee_collector)
+        .store_uint(mintable, 1)
         .end_cell()
     );
 }
 
-() genesis_mint(slice to_address, cell jetton_wallet_code, int amount, cell master_msg,
-               int fee_numerator, int fee_denominator, slice fee_collector) impure {
+() do_mint(slice to_address, cell jetton_wallet_code, int amount, cell master_msg,
+           int fee_numerator, int fee_denominator, slice fee_collector) impure {
     cell state_init = calculate_tax_jetton_wallet_state_init(
         to_address, my_address(), jetton_wallet_code
     );
@@ -66,7 +70,7 @@ int op::update_wallet_fees() asm "6 PUSHINT";
         .store_ref(master_msg);
     send_raw_message(msg.end_cell(), 1);
 
-    ;; Initialize fee params in the new wallet immediately (mode 64)
+    ;; Initialize fee params in the new wallet (mode 64 — carry remaining gas)
     var fee_init_body = begin_cell()
         .store_uint(op::update_wallet_fees(), 32)
         .store_uint(0, 64)
@@ -103,21 +107,44 @@ int op::update_wallet_fees() asm "6 PUSHINT";
     int query_id = in_msg_body~load_uint(64);
 
     (int total_supply, slice admin_address, cell content, cell jetton_wallet_code,
-     int fee_numerator, int fee_denominator, slice fee_collector) = load_data();
+     int fee_numerator, int fee_denominator, slice fee_collector, int mintable) = load_data();
 
-    if (op == 7) { ;; genesis: one-time initial supply distribution (only when total_supply == 0)
+    if (op == 7) { ;; genesis: one-time initial supply (only when total_supply == 0)
         throw_unless(73, equal_slices(sender_address, admin_address));
-        throw_unless(78, total_supply == 0); ;; supply already set — immutable
+        throw_unless(78, total_supply == 0);
         slice to_address = in_msg_body~load_msg_addr();
         int amount = in_msg_body~load_coins();
         cell master_msg = in_msg_body~load_ref();
         slice master_msg_cs = master_msg.begin_parse();
         master_msg_cs~skip_bits(32 + 64);
         int jetton_amount = master_msg_cs~load_coins();
-        genesis_mint(to_address, jetton_wallet_code, amount, master_msg,
-                    fee_numerator, fee_denominator, fee_collector);
+        do_mint(to_address, jetton_wallet_code, amount, master_msg,
+                fee_numerator, fee_denominator, fee_collector);
         save_data(jetton_amount, admin_address, content, jetton_wallet_code,
-                  fee_numerator, fee_denominator, fee_collector);
+                  fee_numerator, fee_denominator, fee_collector, mintable);
+        return ();
+    }
+
+    if (op == op::mint()) {
+        throw_unless(73, equal_slices(sender_address, admin_address));
+        throw_unless(77, mintable);
+        slice to_address = in_msg_body~load_msg_addr();
+        int amount = in_msg_body~load_coins();
+        cell master_msg = in_msg_body~load_ref();
+        slice master_msg_cs = master_msg.begin_parse();
+        master_msg_cs~skip_bits(32 + 64);
+        int jetton_amount = master_msg_cs~load_coins();
+        do_mint(to_address, jetton_wallet_code, amount, master_msg,
+                fee_numerator, fee_denominator, fee_collector);
+        save_data(total_supply + jetton_amount, admin_address, content, jetton_wallet_code,
+                  fee_numerator, fee_denominator, fee_collector, mintable);
+        return ();
+    }
+
+    if (op == 8) { ;; lock_mint: permanently revoke minting (irreversible)
+        throw_unless(73, equal_slices(sender_address, admin_address));
+        save_data(total_supply, admin_address, content, jetton_wallet_code,
+                  fee_numerator, fee_denominator, fee_collector, 0);
         return ();
     }
 
@@ -133,7 +160,7 @@ int op::update_wallet_fees() asm "6 PUSHINT";
             )
         );
         save_data(total_supply - jetton_amount, admin_address, content, jetton_wallet_code,
-                  fee_numerator, fee_denominator, fee_collector);
+                  fee_numerator, fee_denominator, fee_collector, mintable);
         slice response_address = in_msg_body~load_msg_addr();
         if (response_address.preload_uint(2) != 0) {
             var msg = begin_cell()
@@ -179,30 +206,18 @@ int op::update_wallet_fees() asm "6 PUSHINT";
         throw_unless(73, equal_slices(sender_address, admin_address));
         slice new_admin_address = in_msg_body~load_msg_addr();
         save_data(total_supply, new_admin_address, content, jetton_wallet_code,
-                  fee_numerator, fee_denominator, fee_collector);
+                  fee_numerator, fee_denominator, fee_collector, mintable);
         return ();
     }
 
     if (op == 4) { ;; change content
         throw_unless(73, equal_slices(sender_address, admin_address));
         save_data(total_supply, admin_address, in_msg_body~load_ref(), jetton_wallet_code,
-                  fee_numerator, fee_denominator, fee_collector);
+                  fee_numerator, fee_denominator, fee_collector, mintable);
         return ();
     }
 
-    if (op == 5) { ;; set fees — max 5%: fee_numerator * 20 <= fee_denominator
-        throw_unless(73, equal_slices(sender_address, admin_address));
-        int new_fee_numerator = in_msg_body~load_uint(16);
-        int new_fee_denominator = in_msg_body~load_uint(16);
-        slice new_fee_collector = in_msg_body~load_msg_addr();
-        throw_unless(76, new_fee_denominator > 0);
-        throw_unless(76, new_fee_numerator * 20 <= new_fee_denominator);
-        save_data(total_supply, admin_address, content, jetton_wallet_code,
-                  new_fee_numerator, new_fee_denominator, new_fee_collector);
-        return ();
-    }
-
-    if (op == 6) { ;; push fee update to a specific wallet
+    if (op == 6) { ;; push current fee params to a specific wallet
         throw_unless(73, equal_slices(sender_address, admin_address));
         slice target_wallet = in_msg_body~load_msg_addr();
         var update_msg_body = begin_cell()
@@ -227,13 +242,13 @@ int op::update_wallet_fees() asm "6 PUSHINT";
 
 (int, int, slice, cell, cell) get_jetton_data() method_id {
     (int total_supply, slice admin_address, cell content, cell jetton_wallet_code,
-     int fee_numerator, int fee_denominator, slice fee_collector) = load_data();
-    return (total_supply, 0, admin_address, content, jetton_wallet_code); ;; mintable=0: supply is fixed
+     int fee_numerator, int fee_denominator, slice fee_collector, int mintable) = load_data();
+    return (total_supply, mintable ? -1 : 0, admin_address, content, jetton_wallet_code);
 }
 
 slice get_wallet_address(slice owner_address) method_id {
     (int total_supply, slice admin_address, cell content, cell jetton_wallet_code,
-     int fee_numerator, int fee_denominator, slice fee_collector) = load_data();
+     int fee_numerator, int fee_denominator, slice fee_collector, int mintable) = load_data();
     return calculate_user_tax_jetton_wallet_address(
         owner_address, my_address(), jetton_wallet_code
     );
@@ -241,6 +256,6 @@ slice get_wallet_address(slice owner_address) method_id {
 
 (int, int, slice) get_fee_params() method_id {
     (int total_supply, slice admin_address, cell content, cell jetton_wallet_code,
-     int fee_numerator, int fee_denominator, slice fee_collector) = load_data();
+     int fee_numerator, int fee_denominator, slice fee_collector, int mintable) = load_data();
     return (fee_numerator, fee_denominator, fee_collector);
 }

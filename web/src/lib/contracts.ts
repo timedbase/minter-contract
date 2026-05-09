@@ -43,8 +43,9 @@ export function getTaxWalletCode(): Cell {
 
 function buildMinterInitData(owner: Address, metadataCell: Cell, walletCode: Cell): Cell {
   return beginCell()
-    .storeCoins(0n) // total_supply = 0; set by genesis (op 7)
+    .storeCoins(0n)    // total_supply = 0; set by genesis (op 7)
     .storeAddress(owner)
+    .storeUint(1, 1)   // mintable = true
     .storeRef(metadataCell)
     .storeRef(walletCode)
     .endCell();
@@ -59,13 +60,14 @@ function buildTaxMinterInitData(
   feeCollector: Address
 ): Cell {
   return beginCell()
-    .storeCoins(0n) // total_supply = 0; set by genesis (op 7)
+    .storeCoins(0n)    // total_supply = 0; set by genesis (op 7)
     .storeAddress(owner)
     .storeRef(metadataCell)
     .storeRef(walletCode)
     .storeUint(feeNumerator, 16)
     .storeUint(feeDenominator, 16)
     .storeAddress(feeCollector)
+    .storeUint(1, 1)   // mintable = true
     .endCell();
 }
 
@@ -167,6 +169,35 @@ export function buildGenesisBody(to: Address, jettonAmount: bigint, adminAddr: A
     .endCell();
 }
 
+/** op 21: mint tokens to an address */
+export function buildMintBody(to: Address, jettonAmount: bigint, responseAddress: Address): Cell {
+  const internalTransfer = beginCell()
+    .storeUint(0x178d4519, 32) // op::internal_transfer
+    .storeUint(0, 64)
+    .storeCoins(jettonAmount)
+    .storeUint(0, 2)           // addr_none (from)
+    .storeAddress(responseAddress)
+    .storeCoins(0n)
+    .storeUint(0, 1)
+    .endCell();
+
+  return beginCell()
+    .storeUint(21, 32)              // op::mint
+    .storeUint(0, 64)
+    .storeAddress(to)
+    .storeCoins(toNano("0.05"))     // TON for wallet deploy + internal transfer gas
+    .storeRef(internalTransfer)
+    .endCell();
+}
+
+/** op 8: lock_mint — permanently revoke minting (irreversible) */
+export function buildLockMintBody(): Cell {
+  return beginCell()
+    .storeUint(8, 32)
+    .storeUint(0, 64)
+    .endCell();
+}
+
 /** op 3: change admin */
 export function buildChangeAdminBody(newAdmin: Address): Cell {
   return beginCell()
@@ -221,6 +252,7 @@ export function createTonClient(network: "mainnet" | "testnet"): TonClient {
 
 export interface MinterState {
   totalSupply: bigint;
+  mintable: boolean;
   admin: Address;
   isTaxJetton: boolean;
   feeNumerator?: number;
@@ -240,9 +272,10 @@ export async function loadMinterState(
   const jettonData = await client.runMethod(address, "get_jetton_data");
   const stack = jettonData.stack as TupleReader;
 
-  const totalSupply = stack.readBigNumber(); // stack[0]: total_supply
-  stack.skip(1);                             // stack[1]: mintable — always 0, skip
-  const adminSlice = stack.readCell().beginParse(); // stack[2]: admin_address as cell
+  const totalSupply = stack.readBigNumber();          // stack[0]: total_supply
+  const mintableInt = stack.readBigNumber();           // stack[1]: mintable (-1 = true, 0 = false)
+  const mintable = mintableInt !== 0n;
+  const adminSlice = stack.readCell().beginParse();    // stack[2]: admin_address as cell
   const admin = adminSlice.loadAddress();
 
   // Try tax-specific method
@@ -266,6 +299,7 @@ export async function loadMinterState(
 
   return {
     totalSupply,
+    mintable,
     admin,
     isTaxJetton,
     feeNumerator,

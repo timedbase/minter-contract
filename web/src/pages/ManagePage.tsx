@@ -4,10 +4,10 @@ import { Address, toNano } from "@ton/core";
 import {
   createTonClient,
   loadMinterState,
+  buildMintBody,
+  buildLockMintBody,
   buildChangeAdminBody,
   buildChangeContentBody,
-  buildSetFeesBody,
-  buildPushFeeUpdateBody,
   cellToBase64,
   MinterState,
 } from "../lib/contracts";
@@ -18,10 +18,10 @@ interface ManagePageProps {
 }
 
 type ActionTab =
+  | "mint"
+  | "lockMint"
   | "changeAdmin"
-  | "changeContent"
-  | "setFees"
-  | "pushFeeUpdate";
+  | "changeContent";
 
 export default function ManagePage({ network }: ManagePageProps) {
   const [tonConnectUI] = useTonConnectUI();
@@ -41,15 +41,13 @@ export default function ManagePage({ network }: ManagePageProps) {
     message?: string;
   }>({ type: "idle" });
 
+  const [mintTo, setMintTo] = useState("");
+  const [mintAmount, setMintAmount] = useState("");
   const [newAdmin, setNewAdmin] = useState("");
   const [contentName, setContentName] = useState("");
   const [contentSymbol, setContentSymbol] = useState("");
   const [contentDescription, setContentDescription] = useState("");
   const [contentImage, setContentImage] = useState("");
-  const [setFeeNum, setSetFeeNum] = useState("");
-  const [setFeeDen, setSetFeeDen] = useState("");
-  const [setFeeCollector, setSetFeeCollector] = useState("");
-  const [targetWallet, setTargetWallet] = useState("");
 
   const isConnected = !!wallet;
 
@@ -72,12 +70,6 @@ export default function ManagePage({ network }: ManagePageProps) {
       setContractAddress(addr);
       setMinterState(state);
 
-      if (state.isTaxJetton) {
-        setSetFeeNum(String(state.feeNumerator ?? ""));
-        setSetFeeDen(String(state.feeDenominator ?? ""));
-        setSetFeeCollector(state.feeCollector?.toString({ bounceable: true }) ?? "");
-      }
-
       setLoadStatus({ type: "success", message: "Contract loaded." });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -91,6 +83,19 @@ export default function ManagePage({ network }: ManagePageProps) {
       validUntil: Math.floor(Date.now() / 1000) + 360,
       messages: [{ address: contractAddress.toString({ bounceable: true }), amount, payload }],
     });
+  }
+
+  async function handleMint() {
+    setTxStatus({ type: "loading", message: "Sending mint transaction..." });
+    try {
+      const to = Address.parse(mintTo);
+      const amount = parseFloat(mintAmount);
+      if (isNaN(amount) || amount <= 0) throw new Error("Amount must be a positive number");
+      const jettonAmount = BigInt(Math.round(amount * 1e9));
+      const responseAddr = wallet ? Address.parseRaw(wallet.account.address) : to;
+      await sendTx(cellToBase64(buildMintBody(to, jettonAmount, responseAddr)), toNano("0.1").toString());
+      setTxStatus({ type: "success", message: "Mint transaction sent!" });
+    } catch (err) { handleTxError(err); }
   }
 
   async function handleChangeAdmin() {
@@ -120,26 +125,11 @@ export default function ManagePage({ network }: ManagePageProps) {
     } catch (err) { handleTxError(err); }
   }
 
-  async function handleSetFees() {
-    setTxStatus({ type: "loading", message: "Sending set fees transaction..." });
+  async function handleLockMint() {
+    setTxStatus({ type: "loading", message: "Sending lock mint transaction..." });
     try {
-      const feeNum = parseInt(setFeeNum, 10);
-      const feeDen = parseInt(setFeeDen, 10);
-      if (isNaN(feeNum) || isNaN(feeDen)) throw new Error("Fee values must be numbers");
-      if (feeDen === 0) throw new Error("Fee denominator must not be zero");
-      if (feeNum * 20 > feeDen) throw new Error("Fee exceeds maximum of 5%");
-      const collectorAddr = Address.parse(setFeeCollector);
-      await sendTx(cellToBase64(buildSetFeesBody(feeNum, feeDen, collectorAddr)), toNano("0.05").toString());
-      setTxStatus({ type: "success", message: "Set fees transaction sent!" });
-    } catch (err) { handleTxError(err); }
-  }
-
-  async function handlePushFeeUpdate() {
-    setTxStatus({ type: "loading", message: "Sending push fee update transaction..." });
-    try {
-      const addr = Address.parse(targetWallet);
-      await sendTx(cellToBase64(buildPushFeeUpdateBody(addr)), toNano("0.05").toString());
-      setTxStatus({ type: "success", message: "Push fee update transaction sent!" });
+      await sendTx(cellToBase64(buildLockMintBody()), toNano("0.05").toString());
+      setTxStatus({ type: "success", message: "Minting permanently locked!" });
     } catch (err) { handleTxError(err); }
   }
 
@@ -167,14 +157,10 @@ export default function ManagePage({ network }: ManagePageProps) {
   }
 
   const availableTabs: { id: ActionTab; label: string }[] = [
+    ...(minterState?.mintable ? [{ id: "mint" as ActionTab, label: "Mint" }] : []),
+    ...(minterState?.mintable ? [{ id: "lockMint" as ActionTab, label: "Lock Mint" }] : []),
     { id: "changeAdmin", label: "Change Admin" },
     { id: "changeContent", label: "Change Content" },
-    ...(minterState?.isTaxJetton
-      ? [
-          { id: "setFees" as ActionTab, label: "Set Fees" },
-          { id: "pushFeeUpdate" as ActionTab, label: "Push Fee Update" },
-        ]
-      : []),
   ];
 
   return (
@@ -235,7 +221,11 @@ export default function ManagePage({ network }: ManagePageProps) {
               </div>
               <div className="state-item">
                 <span className="state-label">Mint Authority</span>
-                <span className="state-value badge badge-revoked">None — Fixed Supply</span>
+                {minterState.mintable ? (
+                  <span className="state-value mono">{minterState.admin.toString({ bounceable: true })}</span>
+                ) : (
+                  <span className="state-value badge badge-revoked">None — Fixed Supply</span>
+                )}
               </div>
               <div className="state-item">
                 <span className="state-label">Freeze Key</span>
@@ -281,6 +271,40 @@ export default function ManagePage({ network }: ManagePageProps) {
             </div>
 
             <div className="action-content">
+              {activeAction === "mint" && minterState.mintable && (
+                <div className="action-form">
+                  <div className="form-group">
+                    <label htmlFor="mintTo">Recipient Address</label>
+                    <input
+                      id="mintTo"
+                      type="text"
+                      placeholder="EQ..."
+                      value={mintTo}
+                      onChange={(e) => setMintTo(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="mintAmount">Amount</label>
+                    <input
+                      id="mintAmount"
+                      type="number"
+                      min="0"
+                      step="any"
+                      placeholder="e.g. 1000"
+                      value={mintAmount}
+                      onChange={(e) => setMintAmount(e.target.value)}
+                    />
+                  </div>
+                  <button
+                    className="btn-primary"
+                    onClick={handleMint}
+                    disabled={!isConnected || txStatus.type === "loading"}
+                  >
+                    {txStatus.type === "loading" ? "Sending..." : "Mint Tokens"}
+                  </button>
+                </div>
+              )}
+
               {activeAction === "changeAdmin" && (
                 <div className="action-form">
                   <div className="form-group">
@@ -335,48 +359,17 @@ export default function ManagePage({ network }: ManagePageProps) {
                 </div>
               )}
 
-              {activeAction === "setFees" && minterState.isTaxJetton && (
+              {activeAction === "lockMint" && minterState.mintable && (
                 <div className="action-form">
-                  <div className="form-row">
-                    <div className="form-group">
-                      <label htmlFor="setFeeNum">Fee Numerator</label>
-                      <input id="setFeeNum" type="number" min="0" value={setFeeNum}
-                        onChange={(e) => setSetFeeNum(e.target.value)} />
-                    </div>
-                    <div className="form-group">
-                      <label htmlFor="setFeeDen">Fee Denominator</label>
-                      <input id="setFeeDen" type="number" min="1" value={setFeeDen}
-                        onChange={(e) => setSetFeeDen(e.target.value)} />
-                    </div>
-                  </div>
-                  <div className="fee-display">
-                    Computed fee: <strong>{computeFeePercent(parseInt(setFeeNum), parseInt(setFeeDen))}</strong>
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="setFeeCollector">Fee Collector Address</label>
-                    <input id="setFeeCollector" type="text" placeholder="EQ..."
-                      value={setFeeCollector} onChange={(e) => setSetFeeCollector(e.target.value)} />
-                  </div>
-                  <button className="btn-primary" onClick={handleSetFees}
-                    disabled={!isConnected || txStatus.type === "loading"}>
-                    {txStatus.type === "loading" ? "Sending..." : "Set Fees"}
-                  </button>
-                </div>
-              )}
-
-              {activeAction === "pushFeeUpdate" && minterState.isTaxJetton && (
-                <div className="action-form">
-                  <div className="form-group">
-                    <label htmlFor="targetWallet">Target Wallet Address</label>
-                    <input id="targetWallet" type="text" placeholder="EQ... (jetton wallet address)"
-                      value={targetWallet} onChange={(e) => setTargetWallet(e.target.value)} />
-                    <span className="field-hint">
-                      Push the current fee parameters to a specific jetton wallet contract.
-                    </span>
-                  </div>
-                  <button className="btn-primary" onClick={handlePushFeeUpdate}
-                    disabled={!isConnected || txStatus.type === "loading"}>
-                    {txStatus.type === "loading" ? "Sending..." : "Push Fee Update"}
+                  <span className="field-hint warning">
+                    Warning: This permanently revokes minting for this contract. It cannot be undone.
+                  </span>
+                  <button
+                    className="btn-primary"
+                    onClick={handleLockMint}
+                    disabled={!isConnected || txStatus.type === "loading"}
+                  >
+                    {txStatus.type === "loading" ? "Sending..." : "Lock Mint Forever"}
                   </button>
                 </div>
               )}

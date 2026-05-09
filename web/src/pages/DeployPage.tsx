@@ -43,7 +43,7 @@ export default function DeployPage({ network }: DeployPageProps) {
     image: "",
     jettonType: "standard",
     initialSupply: "",
-    feeNumerator: "30",
+    feeNumerator: "20",
     feeDenominator: "1000",
     feeCollector: "",
     adminAddress: "",
