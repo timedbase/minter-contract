@@ -15,9 +15,8 @@ interface DeployPageProps {
 
 type JettonType = "standard" | "tax";
 
-const DEPLOY_MINTER_FEE = "0.05";  // stateInit deploy
-const GENESIS_FEE_STANDARD = "0.10"; // genesis + deploy jetton wallet
-const GENESIS_FEE_TAX = "0.15";      // genesis + deploy jetton wallet + push fee params
+const TOTAL_FEE_STANDARD = "0.15"; // deploy + genesis + wallet
+const TOTAL_FEE_TAX = "0.20";      // deploy + genesis + wallet + fee init
 
 interface FormState {
   name: string;
@@ -132,23 +131,17 @@ export default function DeployPage({ network }: DeployPageProps) {
 
       setStatus({ type: "loading", message: `Sending deploy transaction to ${contractAddr}...` });
 
-      const genesisFee = form.jettonType === "tax" ? GENESIS_FEE_TAX : GENESIS_FEE_STANDARD;
+      const totalFee = form.jettonType === "tax" ? TOTAL_FEE_TAX : TOTAL_FEE_STANDARD;
 
-      // Two messages in one transaction:
-      //   1. Deploy the minter contract (stateInit, total_supply=0)
-      //   2. op::genesis (op 7) — one-time mint of the form supply to the admin wallet.
-      //      On-chain guard: throws error 78 if total_supply != 0, so supply is fixed forever.
+      // Single message: stateInit deploys the contract AND body runs genesis atomically.
+      // Two separate messages risk genesis arriving before the contract exists (bounces → 0 supply).
       await tonConnectUI.sendTransaction({
         validUntil: Math.floor(Date.now() / 1000) + 360,
         messages: [
           {
             address: contractAddr,
-            amount: toNano(DEPLOY_MINTER_FEE).toString(),
+            amount: toNano(totalFee).toString(),
             stateInit: deployParams.stateInitBoc,
-          },
-          {
-            address: contractAddr,
-            amount: toNano(genesisFee).toString(),
             payload: cellToBase64(genesisBody),
           },
         ],
@@ -344,24 +337,17 @@ export default function DeployPage({ network }: DeployPageProps) {
         <h3 className="card-title">Deployment Cost</h3>
         <div className="fee-breakdown">
           <div className="fee-line">
-            <span className="fee-label">Deploy minter contract</span>
-            <span className="fee-amount">{DEPLOY_MINTER_FEE} TON</span>
-          </div>
-          <div className="fee-line">
             <span className="fee-label">
-              Genesis: mint initial supply{form.jettonType === "tax" ? " + init fee params" : ""}
+              Deploy + genesis{form.jettonType === "tax" ? " + init fee params" : ""}
             </span>
             <span className="fee-amount">
-              {form.jettonType === "tax" ? GENESIS_FEE_TAX : GENESIS_FEE_STANDARD} TON
+              {form.jettonType === "tax" ? TOTAL_FEE_TAX : TOTAL_FEE_STANDARD} TON
             </span>
           </div>
           <div className="fee-line fee-total">
             <span className="fee-label">Total (excess returned)</span>
             <span className="fee-amount">
-              {(
-                parseFloat(DEPLOY_MINTER_FEE) +
-                parseFloat(form.jettonType === "tax" ? GENESIS_FEE_TAX : GENESIS_FEE_STANDARD)
-              ).toFixed(2)} TON
+              {form.jettonType === "tax" ? TOTAL_FEE_TAX : TOTAL_FEE_STANDARD} TON
             </span>
           </div>
         </div>
