@@ -43,11 +43,10 @@ export function getTaxWalletCode(): Cell {
 
 function buildMinterInitData(owner: Address, metadataCell: Cell, walletCode: Cell): Cell {
   return beginCell()
-    .storeCoins(0n)
+    .storeCoins(0n) // total_supply = 0; set by genesis (op 7)
     .storeAddress(owner)
     .storeRef(metadataCell)
     .storeRef(walletCode)
-    .storeUint(1, 1) // mintable = true
     .endCell();
 }
 
@@ -60,14 +59,13 @@ function buildTaxMinterInitData(
   feeCollector: Address
 ): Cell {
   return beginCell()
-    .storeCoins(0n)
+    .storeCoins(0n) // total_supply = 0; set by genesis (op 7)
     .storeAddress(owner)
     .storeRef(metadataCell)
     .storeRef(walletCode)
     .storeUint(feeNumerator, 16)
     .storeUint(feeDenominator, 16)
     .storeAddress(feeCollector)
-    .storeUint(1, 1) // mintable = true
     .endCell();
 }
 
@@ -145,40 +143,27 @@ export async function getTaxDeployParams(
 // ─── Message body builders ────────────────────────────────────────────────────
 
 /**
- * op::mint() = 21 (0x15)
- * Body layout:
- *   uint32(21) + uint64(0) + address(to) + coins(0.05 TON gas)
- *   + ref(internal_transfer body)
- *
- * internal_transfer body:
- *   uint32(0x178d4519) + uint64(0) + coins(jettonAmount)
- *   + addr_none (from) + address(adminAddr) + coins(0) + uint1(0)
+ * op 7: genesis — one-time initial supply distribution.
+ * Can only be called when total_supply == 0 (enforced on-chain).
+ * After this call the supply is permanently fixed.
  */
-export function buildMintBody(to: Address, jettonAmount: bigint, adminAddr: Address): Cell {
+export function buildGenesisBody(to: Address, jettonAmount: bigint, adminAddr: Address): Cell {
   const internalTransfer = beginCell()
     .storeUint(0x178d4519, 32) // op::internal_transfer
-    .storeUint(0, 64)          // query_id
-    .storeCoins(jettonAmount)  // amount
-    .storeUint(0, 2)           // addr_none (from — minter ignores this)
-    .storeAddress(adminAddr)   // response_address
-    .storeCoins(0n)            // forward_ton_amount
-    .storeUint(0, 1)           // no forward_payload
-    .endCell();
-
-  return beginCell()
-    .storeUint(21, 32)              // op::mint
-    .storeUint(0, 64)               // query_id
-    .storeAddress(to)
-    .storeCoins(toNano("0.05"))     // TON forwarded for gas
-    .storeRef(internalTransfer)
-    .endCell();
-}
-
-/** op 7: lock_mint — permanently disables minting, irreversible */
-export function buildLockMintBody(): Cell {
-  return beginCell()
-    .storeUint(7, 32)
     .storeUint(0, 64)
+    .storeCoins(jettonAmount)
+    .storeUint(0, 2)           // addr_none (from)
+    .storeAddress(adminAddr)   // response_address
+    .storeCoins(0n)
+    .storeUint(0, 1)
+    .endCell();
+
+  return beginCell()
+    .storeUint(7, 32)               // op genesis
+    .storeUint(0, 64)
+    .storeAddress(to)
+    .storeCoins(toNano("0.05"))     // TON for gas
+    .storeRef(internalTransfer)
     .endCell();
 }
 
@@ -237,7 +222,6 @@ export function createTonClient(network: "mainnet" | "testnet"): TonClient {
 export interface MinterState {
   totalSupply: bigint;
   admin: Address;
-  mintable: boolean;
   isTaxJetton: boolean;
   feeNumerator?: number;
   feeDenominator?: number;
@@ -256,10 +240,9 @@ export async function loadMinterState(
   const jettonData = await client.runMethod(address, "get_jetton_data");
   const stack = jettonData.stack as TupleReader;
 
-  const totalSupply = stack.readBigNumber();           // stack[0]: total_supply
-  const mintableRaw = stack.readNumber();              // stack[1]: mintable (non-zero = true)
-  const mintable = mintableRaw !== 0;
-  const adminSlice = stack.readCell().beginParse();    // stack[2]: admin_address as cell
+  const totalSupply = stack.readBigNumber(); // stack[0]: total_supply
+  stack.skip(1);                             // stack[1]: mintable — always 0, skip
+  const adminSlice = stack.readCell().beginParse(); // stack[2]: admin_address as cell
   const admin = adminSlice.loadAddress();
 
   // Try tax-specific method
@@ -284,7 +267,6 @@ export async function loadMinterState(
   return {
     totalSupply,
     admin,
-    mintable,
     isTaxJetton,
     feeNumerator,
     feeDenominator,

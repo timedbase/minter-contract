@@ -76,21 +76,19 @@ export function jettonTaxMinterInitData(
   metadata: { [s in JettonMetaDataKeys]?: string },
   feeNumerator: number,
   feeDenominator: number,
-  feeCollector: Address,
-  mintable = true
+  feeCollector: Address
 ): Cell {
   if (feeDenominator === 0) throw new Error("feeDenominator must not be zero");
   if (feeNumerator * 20 > feeDenominator) throw new Error("Fee exceeds 5% maximum");
 
   return beginCell()
-    .storeCoins(0)
+    .storeCoins(0)          // total_supply starts at 0; set via genesis (op 7)
     .storeAddress(owner)
     .storeRef(buildTokenMetadataCell(metadata))
     .storeRef(JETTON_TAX_WALLET_CODE)
     .storeUint(feeNumerator, 16)
     .storeUint(feeDenominator, 16)
     .storeAddress(feeCollector)
-    .storeUint(mintable ? 1 : 0, 1)
     .endCell();
 }
 

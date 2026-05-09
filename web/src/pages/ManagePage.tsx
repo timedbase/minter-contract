@@ -4,12 +4,10 @@ import { Address, toNano } from "@ton/core";
 import {
   createTonClient,
   loadMinterState,
-  buildMintBody,
   buildChangeAdminBody,
   buildChangeContentBody,
   buildSetFeesBody,
   buildPushFeeUpdateBody,
-  buildLockMintBody,
   cellToBase64,
   MinterState,
 } from "../lib/contracts";
@@ -20,12 +18,10 @@ interface ManagePageProps {
 }
 
 type ActionTab =
-  | "mint"
   | "changeAdmin"
   | "changeContent"
   | "setFees"
-  | "pushFeeUpdate"
-  | "lockMint";
+  | "pushFeeUpdate";
 
 export default function ManagePage({ network }: ManagePageProps) {
   const [tonConnectUI] = useTonConnectUI();
@@ -39,35 +35,21 @@ export default function ManagePage({ network }: ManagePageProps) {
     message?: string;
   }>({ type: "idle" });
 
-  const [activeAction, setActiveAction] = useState<ActionTab>("mint");
+  const [activeAction, setActiveAction] = useState<ActionTab>("changeAdmin");
   const [txStatus, setTxStatus] = useState<{
     type: "idle" | "loading" | "success" | "error";
     message?: string;
   }>({ type: "idle" });
 
-  // Mint form
-  const [mintTo, setMintTo] = useState("");
-  const [mintAmount, setMintAmount] = useState("");
-
-  // Change admin form
   const [newAdmin, setNewAdmin] = useState("");
-
-  // Change content form
   const [contentName, setContentName] = useState("");
   const [contentSymbol, setContentSymbol] = useState("");
   const [contentDescription, setContentDescription] = useState("");
   const [contentImage, setContentImage] = useState("");
-
-  // Set fees form
   const [setFeeNum, setSetFeeNum] = useState("");
   const [setFeeDen, setSetFeeDen] = useState("");
   const [setFeeCollector, setSetFeeCollector] = useState("");
-
-  // Push fee update form
   const [targetWallet, setTargetWallet] = useState("");
-
-  // Lock mint confirmation
-  const [lockMintConfirmed, setLockMintConfirmed] = useState(false);
 
   const isConnected = !!wallet;
 
@@ -90,7 +72,6 @@ export default function ManagePage({ network }: ManagePageProps) {
       setContractAddress(addr);
       setMinterState(state);
 
-      // Pre-fill fee fields if tax jetton
       if (state.isTaxJetton) {
         setSetFeeNum(String(state.feeNumerator ?? ""));
         setSetFeeDen(String(state.feeDenominator ?? ""));
@@ -108,60 +89,17 @@ export default function ManagePage({ network }: ManagePageProps) {
     if (!contractAddress) return;
     await tonConnectUI.sendTransaction({
       validUntil: Math.floor(Date.now() / 1000) + 360,
-      messages: [
-        {
-          address: contractAddress.toString({ bounceable: true }),
-          amount,
-          payload,
-        },
-      ],
+      messages: [{ address: contractAddress.toString({ bounceable: true }), amount, payload }],
     });
-  }
-
-  async function handleMint() {
-    setTxStatus({ type: "loading", message: "Sending mint transaction..." });
-    try {
-      let toAddr: Address;
-      try {
-        toAddr = Address.parse(mintTo);
-      } catch {
-        throw new Error("Invalid recipient address");
-      }
-
-      const amount = parseFloat(mintAmount);
-      if (isNaN(amount) || amount <= 0) throw new Error("Invalid mint amount");
-
-      const jettonAmount = BigInt(Math.floor(amount * 1e9));
-      let adminAddr: Address;
-      try {
-        adminAddr = Address.parse(wallet!.account.address);
-      } catch {
-        adminAddr = contractAddress!; // fallback
-      }
-
-      const body = buildMintBody(toAddr, jettonAmount, adminAddr);
-      await sendTx(cellToBase64(body), toNano("0.1").toString());
-      setTxStatus({ type: "success", message: "Mint transaction sent!" });
-    } catch (err) {
-      handleTxError(err);
-    }
   }
 
   async function handleChangeAdmin() {
     setTxStatus({ type: "loading", message: "Sending change admin transaction..." });
     try {
-      let addr: Address;
-      try {
-        addr = Address.parse(newAdmin);
-      } catch {
-        throw new Error("Invalid new admin address");
-      }
-      const body = buildChangeAdminBody(addr);
-      await sendTx(cellToBase64(body), toNano("0.05").toString());
+      const addr = Address.parse(newAdmin);
+      await sendTx(cellToBase64(buildChangeAdminBody(addr)), toNano("0.05").toString());
       setTxStatus({ type: "success", message: "Change admin transaction sent!" });
-    } catch (err) {
-      handleTxError(err);
-    }
+    } catch (err) { handleTxError(err); }
   }
 
   async function handleChangeContent() {
@@ -169,22 +107,17 @@ export default function ManagePage({ network }: ManagePageProps) {
     try {
       if (!contentName.trim()) throw new Error("Token name is required");
       if (!contentSymbol.trim()) throw new Error("Token symbol is required");
-
       const metadata: JettonMetadata = {
         name: contentName.trim(),
         symbol: contentSymbol.trim(),
         description: contentDescription.trim() || undefined,
         image: contentImage.trim() || undefined,
       };
-
       const metadataCell = await buildMetadataCell(metadata);
-      const body = buildChangeContentBody(metadataCell);
       setTxStatus({ type: "loading", message: "Sending change content transaction..." });
-      await sendTx(cellToBase64(body), toNano("0.05").toString());
+      await sendTx(cellToBase64(buildChangeContentBody(metadataCell)), toNano("0.05").toString());
       setTxStatus({ type: "success", message: "Change content transaction sent!" });
-    } catch (err) {
-      handleTxError(err);
-    }
+    } catch (err) { handleTxError(err); }
   }
 
   async function handleSetFees() {
@@ -195,51 +128,19 @@ export default function ManagePage({ network }: ManagePageProps) {
       if (isNaN(feeNum) || isNaN(feeDen)) throw new Error("Fee values must be numbers");
       if (feeDen === 0) throw new Error("Fee denominator must not be zero");
       if (feeNum * 20 > feeDen) throw new Error("Fee exceeds maximum of 5%");
-
-      let collectorAddr: Address;
-      try {
-        collectorAddr = Address.parse(setFeeCollector);
-      } catch {
-        throw new Error("Invalid fee collector address");
-      }
-
-      const body = buildSetFeesBody(feeNum, feeDen, collectorAddr);
-      await sendTx(cellToBase64(body), toNano("0.05").toString());
+      const collectorAddr = Address.parse(setFeeCollector);
+      await sendTx(cellToBase64(buildSetFeesBody(feeNum, feeDen, collectorAddr)), toNano("0.05").toString());
       setTxStatus({ type: "success", message: "Set fees transaction sent!" });
-    } catch (err) {
-      handleTxError(err);
-    }
+    } catch (err) { handleTxError(err); }
   }
 
   async function handlePushFeeUpdate() {
     setTxStatus({ type: "loading", message: "Sending push fee update transaction..." });
     try {
-      let addr: Address;
-      try {
-        addr = Address.parse(targetWallet);
-      } catch {
-        throw new Error("Invalid target wallet address");
-      }
-      const body = buildPushFeeUpdateBody(addr);
-      await sendTx(cellToBase64(body), toNano("0.05").toString());
+      const addr = Address.parse(targetWallet);
+      await sendTx(cellToBase64(buildPushFeeUpdateBody(addr)), toNano("0.05").toString());
       setTxStatus({ type: "success", message: "Push fee update transaction sent!" });
-    } catch (err) {
-      handleTxError(err);
-    }
-  }
-
-  async function handleLockMint() {
-    if (!lockMintConfirmed) return;
-    setTxStatus({ type: "loading", message: "Sending lock mint transaction..." });
-    try {
-      const body = buildLockMintBody();
-      await sendTx(cellToBase64(body), toNano("0.05").toString());
-      setTxStatus({ type: "success", message: "Mint authority permanently revoked." });
-      setLockMintConfirmed(false);
-      if (minterState) setMinterState({ ...minterState, mintable: false });
-    } catch (err) {
-      handleTxError(err);
-    }
+    } catch (err) { handleTxError(err); }
   }
 
   function handleTxError(err: unknown) {
@@ -252,7 +153,6 @@ export default function ManagePage({ network }: ManagePageProps) {
   }
 
   function formatSupply(supply: bigint): string {
-    // Display with 9 decimal places (standard jetton decimals)
     const str = supply.toString().padStart(10, "0");
     const intPart = str.slice(0, -9) || "0";
     const fracPart = str.slice(-9).replace(/0+$/, "");
@@ -267,7 +167,6 @@ export default function ManagePage({ network }: ManagePageProps) {
   }
 
   const availableTabs: { id: ActionTab; label: string }[] = [
-    ...(minterState?.mintable ? [{ id: "mint" as ActionTab, label: "Mint" }] : []),
     { id: "changeAdmin", label: "Change Admin" },
     { id: "changeContent", label: "Change Content" },
     ...(minterState?.isTaxJetton
@@ -276,7 +175,6 @@ export default function ManagePage({ network }: ManagePageProps) {
           { id: "pushFeeUpdate" as ActionTab, label: "Push Fee Update" },
         ]
       : []),
-    ...(minterState?.mintable ? [{ id: "lockMint" as ActionTab, label: "🔒 Lock Mint" }] : []),
   ];
 
   return (
@@ -304,7 +202,6 @@ export default function ManagePage({ network }: ManagePageProps) {
             {loadStatus.type === "loading" ? "Loading..." : "Load"}
           </button>
         </div>
-
         {loadStatus.type !== "idle" && (
           <div className={`status-message status-${loadStatus.type}`}>
             {loadStatus.type === "loading" && <span className="spinner" />}
@@ -320,9 +217,7 @@ export default function ManagePage({ network }: ManagePageProps) {
             <div className="state-grid">
               <div className="state-item">
                 <span className="state-label">Address</span>
-                <span className="state-value mono">
-                  {contractAddress.toString({ bounceable: true })}
-                </span>
+                <span className="state-value mono">{contractAddress.toString({ bounceable: true })}</span>
               </div>
               <div className="state-item">
                 <span className="state-label">Total Supply</span>
@@ -330,9 +225,7 @@ export default function ManagePage({ network }: ManagePageProps) {
               </div>
               <div className="state-item">
                 <span className="state-label">Admin</span>
-                <span className="state-value mono">
-                  {minterState.admin.toString({ bounceable: true })}
-                </span>
+                <span className="state-value mono">{minterState.admin.toString({ bounceable: true })}</span>
               </div>
               <div className="state-item">
                 <span className="state-label">Type</span>
@@ -342,9 +235,7 @@ export default function ManagePage({ network }: ManagePageProps) {
               </div>
               <div className="state-item">
                 <span className="state-label">Mint Authority</span>
-                <span className={`state-value badge ${minterState.mintable ? "badge-standard" : "badge-revoked"}`}>
-                  {minterState.mintable ? "Active" : "Permanently Revoked"}
-                </span>
+                <span className="state-value badge badge-revoked">None — Fixed Supply</span>
               </div>
               <div className="state-item">
                 <span className="state-label">Freeze Key</span>
@@ -372,22 +263,17 @@ export default function ManagePage({ network }: ManagePageProps) {
 
           <div className="card">
             <h3 className="card-title">Admin Actions</h3>
-
             {!isConnected && (
               <div className="status-message status-error">
                 Connect your wallet to perform admin actions.
               </div>
             )}
-
             <div className="action-tabs">
               {availableTabs.map((tab) => (
                 <button
                   key={tab.id}
                   className={`action-tab ${activeAction === tab.id ? "active" : ""}`}
-                  onClick={() => {
-                    setActiveAction(tab.id);
-                    setTxStatus({ type: "idle" });
-                  }}
+                  onClick={() => { setActiveAction(tab.id); setTxStatus({ type: "idle" }); }}
                 >
                   {tab.label}
                 </button>
@@ -395,41 +281,6 @@ export default function ManagePage({ network }: ManagePageProps) {
             </div>
 
             <div className="action-content">
-              {activeAction === "mint" && (
-                <div className="action-form">
-                  <div className="form-group">
-                    <label htmlFor="mintTo">Recipient Address</label>
-                    <input
-                      id="mintTo"
-                      type="text"
-                      placeholder="EQ..."
-                      value={mintTo}
-                      onChange={(e) => setMintTo(e.target.value)}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="mintAmount">Amount (tokens)</label>
-                    <input
-                      id="mintAmount"
-                      type="number"
-                      min="0"
-                      step="any"
-                      placeholder="1000"
-                      value={mintAmount}
-                      onChange={(e) => setMintAmount(e.target.value)}
-                    />
-                    <span className="field-hint">Transaction fee: 0.1 TON</span>
-                  </div>
-                  <button
-                    className="btn-primary"
-                    onClick={handleMint}
-                    disabled={!isConnected || txStatus.type === "loading"}
-                  >
-                    {txStatus.type === "loading" ? "Sending..." : "Mint Tokens"}
-                  </button>
-                </div>
-              )}
-
               {activeAction === "changeAdmin" && (
                 <div className="action-form">
                   <div className="form-group">
@@ -459,49 +310,26 @@ export default function ManagePage({ network }: ManagePageProps) {
                 <div className="action-form">
                   <div className="form-group">
                     <label htmlFor="contentName">Token Name *</label>
-                    <input
-                      id="contentName"
-                      type="text"
-                      placeholder="e.g. My Token"
-                      value={contentName}
-                      onChange={(e) => setContentName(e.target.value)}
-                    />
+                    <input id="contentName" type="text" placeholder="e.g. My Token"
+                      value={contentName} onChange={(e) => setContentName(e.target.value)} />
                   </div>
                   <div className="form-group">
                     <label htmlFor="contentSymbol">Symbol *</label>
-                    <input
-                      id="contentSymbol"
-                      type="text"
-                      placeholder="e.g. MTK"
-                      value={contentSymbol}
-                      onChange={(e) => setContentSymbol(e.target.value)}
-                    />
+                    <input id="contentSymbol" type="text" placeholder="e.g. MTK"
+                      value={contentSymbol} onChange={(e) => setContentSymbol(e.target.value)} />
                   </div>
                   <div className="form-group">
                     <label htmlFor="contentDescription">Description</label>
-                    <textarea
-                      id="contentDescription"
-                      rows={3}
-                      placeholder="Optional description"
-                      value={contentDescription}
-                      onChange={(e) => setContentDescription(e.target.value)}
-                    />
+                    <textarea id="contentDescription" rows={3} placeholder="Optional description"
+                      value={contentDescription} onChange={(e) => setContentDescription(e.target.value)} />
                   </div>
                   <div className="form-group">
                     <label htmlFor="contentImage">Image URL</label>
-                    <input
-                      id="contentImage"
-                      type="url"
-                      placeholder="https://example.com/icon.png"
-                      value={contentImage}
-                      onChange={(e) => setContentImage(e.target.value)}
-                    />
+                    <input id="contentImage" type="url" placeholder="https://example.com/icon.png"
+                      value={contentImage} onChange={(e) => setContentImage(e.target.value)} />
                   </div>
-                  <button
-                    className="btn-primary"
-                    onClick={handleChangeContent}
-                    disabled={!isConnected || txStatus.type === "loading"}
-                  >
+                  <button className="btn-primary" onClick={handleChangeContent}
+                    disabled={!isConnected || txStatus.type === "loading"}>
                     {txStatus.type === "loading" ? "Sending..." : "Change Content"}
                   </button>
                 </div>
@@ -512,46 +340,25 @@ export default function ManagePage({ network }: ManagePageProps) {
                   <div className="form-row">
                     <div className="form-group">
                       <label htmlFor="setFeeNum">Fee Numerator</label>
-                      <input
-                        id="setFeeNum"
-                        type="number"
-                        min="0"
-                        value={setFeeNum}
-                        onChange={(e) => setSetFeeNum(e.target.value)}
-                      />
+                      <input id="setFeeNum" type="number" min="0" value={setFeeNum}
+                        onChange={(e) => setSetFeeNum(e.target.value)} />
                     </div>
                     <div className="form-group">
                       <label htmlFor="setFeeDen">Fee Denominator</label>
-                      <input
-                        id="setFeeDen"
-                        type="number"
-                        min="1"
-                        value={setFeeDen}
-                        onChange={(e) => setSetFeeDen(e.target.value)}
-                      />
+                      <input id="setFeeDen" type="number" min="1" value={setFeeDen}
+                        onChange={(e) => setSetFeeDen(e.target.value)} />
                     </div>
                   </div>
                   <div className="fee-display">
-                    Computed fee:{" "}
-                    <strong>
-                      {computeFeePercent(parseInt(setFeeNum), parseInt(setFeeDen))}
-                    </strong>
+                    Computed fee: <strong>{computeFeePercent(parseInt(setFeeNum), parseInt(setFeeDen))}</strong>
                   </div>
                   <div className="form-group">
                     <label htmlFor="setFeeCollector">Fee Collector Address</label>
-                    <input
-                      id="setFeeCollector"
-                      type="text"
-                      placeholder="EQ..."
-                      value={setFeeCollector}
-                      onChange={(e) => setSetFeeCollector(e.target.value)}
-                    />
+                    <input id="setFeeCollector" type="text" placeholder="EQ..."
+                      value={setFeeCollector} onChange={(e) => setSetFeeCollector(e.target.value)} />
                   </div>
-                  <button
-                    className="btn-primary"
-                    onClick={handleSetFees}
-                    disabled={!isConnected || txStatus.type === "loading"}
-                  >
+                  <button className="btn-primary" onClick={handleSetFees}
+                    disabled={!isConnected || txStatus.type === "loading"}>
                     {txStatus.type === "loading" ? "Sending..." : "Set Fees"}
                   </button>
                 </div>
@@ -561,47 +368,15 @@ export default function ManagePage({ network }: ManagePageProps) {
                 <div className="action-form">
                   <div className="form-group">
                     <label htmlFor="targetWallet">Target Wallet Address</label>
-                    <input
-                      id="targetWallet"
-                      type="text"
-                      placeholder="EQ... (jetton wallet address)"
-                      value={targetWallet}
-                      onChange={(e) => setTargetWallet(e.target.value)}
-                    />
+                    <input id="targetWallet" type="text" placeholder="EQ... (jetton wallet address)"
+                      value={targetWallet} onChange={(e) => setTargetWallet(e.target.value)} />
                     <span className="field-hint">
                       Push the current fee parameters to a specific jetton wallet contract.
                     </span>
                   </div>
-                  <button
-                    className="btn-primary"
-                    onClick={handlePushFeeUpdate}
-                    disabled={!isConnected || txStatus.type === "loading"}
-                  >
+                  <button className="btn-primary" onClick={handlePushFeeUpdate}
+                    disabled={!isConnected || txStatus.type === "loading"}>
                     {txStatus.type === "loading" ? "Sending..." : "Push Fee Update"}
-                  </button>
-                </div>
-              )}
-
-              {activeAction === "lockMint" && minterState.mintable && (
-                <div className="action-form">
-                  <div className="lock-mint-warning">
-                    <strong>⚠ This action is permanent and irreversible.</strong>
-                    <p>Once mint authority is revoked, no new tokens can ever be created — not even by the admin. The total supply will be fixed forever.</p>
-                  </div>
-                  <label className="checkbox-label">
-                    <input
-                      type="checkbox"
-                      checked={lockMintConfirmed}
-                      onChange={(e) => setLockMintConfirmed(e.target.checked)}
-                    />
-                    I understand this cannot be undone
-                  </label>
-                  <button
-                    className="btn-danger"
-                    onClick={handleLockMint}
-                    disabled={!isConnected || !lockMintConfirmed || txStatus.type === "loading"}
-                  >
-                    {txStatus.type === "loading" ? "Sending..." : "Permanently Revoke Mint Authority"}
                   </button>
                 </div>
               )}

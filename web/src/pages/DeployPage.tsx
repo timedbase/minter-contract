@@ -4,6 +4,8 @@ import { Address, toNano } from "@ton/core";
 import {
   getStandardDeployParams,
   getTaxDeployParams,
+  buildGenesisBody,
+  cellToBase64,
 } from "../lib/contracts";
 import type { JettonMetadata } from "../lib/metadata";
 
@@ -19,6 +21,7 @@ interface FormState {
   description: string;
   image: string;
   jettonType: JettonType;
+  initialSupply: string;
   feeNumerator: string;
   feeDenominator: string;
   feeCollector: string;
@@ -35,6 +38,7 @@ export default function DeployPage({ network }: DeployPageProps) {
     description: "",
     image: "",
     jettonType: "standard",
+    initialSupply: "",
     feeNumerator: "30",
     feeDenominator: "1000",
     feeCollector: "",
@@ -47,7 +51,6 @@ export default function DeployPage({ network }: DeployPageProps) {
   const [deployedAddress, setDeployedAddress] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  // Auto-fill admin address from connected wallet
   useEffect(() => {
     if (wallet?.account?.address) {
       try {
@@ -89,6 +92,10 @@ export default function DeployPage({ network }: DeployPageProps) {
       if (!form.name.trim()) throw new Error("Token name is required");
       if (!form.symbol.trim()) throw new Error("Token symbol is required");
 
+      const supplyNum = parseFloat(form.initialSupply);
+      if (isNaN(supplyNum) || supplyNum <= 0) throw new Error("Initial supply must be a positive number");
+      const jettonAmount = BigInt(Math.round(supplyNum * 1e9));
+
       const metadata: JettonMetadata = {
         name: form.name.trim(),
         symbol: form.symbol.trim(),
@@ -102,8 +109,7 @@ export default function DeployPage({ network }: DeployPageProps) {
       } else {
         const feeNum = parseInt(form.feeNumerator, 10);
         const feeDen = parseInt(form.feeDenominator, 10);
-
-        if (isNaN(feeNum) || isNaN(feeDen)) throw new Error("Fee numerator and denominator must be numbers");
+        if (isNaN(feeNum) || isNaN(feeDen)) throw new Error("Fee values must be numbers");
         if (feeDen === 0) throw new Error("Fee denominator must not be zero");
         if (feeNum * 20 > feeDen) throw new Error("Fee exceeds maximum of 5%");
 
@@ -114,19 +120,18 @@ export default function DeployPage({ network }: DeployPageProps) {
           throw new Error("Invalid fee collector address");
         }
 
-        deployParams = await getTaxDeployParams(
-          ownerAddress,
-          metadata,
-          feeNum,
-          feeDen,
-          feeCollectorAddr
-        );
+        deployParams = await getTaxDeployParams(ownerAddress, metadata, feeNum, feeDen, feeCollectorAddr);
       }
 
       const contractAddr = deployParams.address.toString({ bounceable: true });
+      const genesisBody = buildGenesisBody(ownerAddress, jettonAmount, ownerAddress);
 
       setStatus({ type: "loading", message: `Sending deploy transaction to ${contractAddr}...` });
 
+      // Two messages in one transaction:
+      //   1. Deploy the minter contract (stateInit, no body)
+      //   2. Genesis: distribute the fixed initial supply to the admin
+      // On-chain: op 7 throws error 78 if total_supply != 0, so supply can never be inflated.
       await tonConnectUI.sendTransaction({
         validUntil: Math.floor(Date.now() / 1000) + 360,
         messages: [
@@ -135,14 +140,18 @@ export default function DeployPage({ network }: DeployPageProps) {
             amount: toNano("0.05").toString(),
             stateInit: deployParams.stateInitBoc,
           },
+          {
+            address: contractAddr,
+            amount: toNano("0.1").toString(),
+            payload: cellToBase64(genesisBody),
+          },
         ],
       });
 
       setDeployedAddress(contractAddr);
-      setStatus({ type: "success", message: "Contract deployed successfully!" });
+      setStatus({ type: "success", message: "Contract deployed with fixed supply!" });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // User cancelled is not an error worth showing prominently
       if (message.includes("User rejecte") || message.includes("Reject")) {
         setStatus({ type: "idle" });
       } else {
@@ -164,7 +173,7 @@ export default function DeployPage({ network }: DeployPageProps) {
     <div className="page">
       <h2 className="page-title">Deploy New Jetton</h2>
       <p className="page-description">
-        Deploy a new Jetton (fungible token) contract on TON ({network}).
+        Deploy a new Jetton on TON ({network}). The supply is set once at creation and is immutable — no minting after deploy.
       </p>
 
       <div className="card">
@@ -196,7 +205,7 @@ export default function DeployPage({ network }: DeployPageProps) {
           <label htmlFor="description">Description</label>
           <textarea
             id="description"
-            placeholder="Optional description of your token"
+            placeholder="Optional description"
             value={form.description}
             onChange={(e) => updateField("description", e.target.value)}
             rows={3}
@@ -212,6 +221,23 @@ export default function DeployPage({ network }: DeployPageProps) {
             value={form.image}
             onChange={(e) => updateField("image", e.target.value)}
           />
+        </div>
+      </div>
+
+      <div className="card">
+        <h3 className="card-title">Supply</h3>
+        <div className="form-group">
+          <label htmlFor="initialSupply">Initial Supply * <span className="label-hint">(fixed forever after deploy)</span></label>
+          <input
+            id="initialSupply"
+            type="number"
+            min="1"
+            step="any"
+            placeholder="e.g. 1000000"
+            value={form.initialSupply}
+            onChange={(e) => updateField("initialSupply", e.target.value)}
+          />
+          <span className="field-hint">All tokens are minted to the admin address on deploy. No further minting is possible.</span>
         </div>
       </div>
 
@@ -271,11 +297,9 @@ export default function DeployPage({ network }: DeployPageProps) {
                 />
               </div>
             </div>
-
             <div className="fee-display">
               Computed fee: <strong>{computedFeePercent()}</strong>
             </div>
-
             <div className="form-group">
               <label htmlFor="feeCollector">
                 Fee Collector Address
@@ -298,9 +322,7 @@ export default function DeployPage({ network }: DeployPageProps) {
         <div className="form-group">
           <label htmlFor="adminAddress">
             Admin Address
-            {isConnected && (
-              <span className="label-hint"> (auto-filled from connected wallet)</span>
-            )}
+            {isConnected && <span className="label-hint"> (auto-filled from connected wallet)</span>}
           </label>
           <input
             id="adminAddress"
@@ -336,11 +358,7 @@ export default function DeployPage({ network }: DeployPageProps) {
         onClick={handleDeploy}
         disabled={!isConnected || status.type === "loading"}
       >
-        {!isConnected
-          ? "Connect Wallet to Deploy"
-          : status.type === "loading"
-          ? "Deploying..."
-          : "Deploy Jetton"}
+        {!isConnected ? "Connect Wallet to Deploy" : status.type === "loading" ? "Deploying..." : "Deploy Jetton"}
       </button>
     </div>
   );
