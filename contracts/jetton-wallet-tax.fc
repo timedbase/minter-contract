@@ -69,9 +69,11 @@ int op::update_wallet_fees() asm "6 PUSHINT";
     slice either_forward_payload = in_msg_body;
 
     ;; TON required: standard check + extra leg for fee transfer (if any)
+    ;; fee_ton omits min_tons_for_storage so 0.05 TON covers a transfer;
+    ;; the fee wallet accumulates storage over successive fee collections.
     int fee_ton = 0;
     if (fee_amount > 0) {
-        fee_ton = gas_consumption + min_tons_for_storage + fwd_fee;
+        fee_ton = gas_consumption + fwd_fee;
     }
     int fwd_count = forward_ton_amount ? 2 : 1;
     throw_unless(709, msg_value >
@@ -98,7 +100,7 @@ int op::update_wallet_fees() asm "6 PUSHINT";
         var fee_msg = begin_cell()
             .store_uint(0x18, 6)
             .store_slice(fee_wallet_address)
-            .store_coins(fee_ton)
+            .store_coins(fee_ton) ;; gas_consumption + fwd_fee
             .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
             .store_ref(fee_state_init)
             .store_ref(fee_msg_body);
