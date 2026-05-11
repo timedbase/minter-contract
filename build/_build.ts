@@ -48,7 +48,7 @@ async function main() {
   }
 
   // go over all the root contracts in the contracts directory
-  const rootContracts = glob.sync(["contracts/*.fc", "contracts/*.func"]);
+  const rootContracts = glob.sync(["contracts/standard/*.fc", "contracts/tax/*.fc", "contracts/*.fc", "contracts/*.func"]);
   for (const rootContract of rootContracts) {
     // compile a new root contract
     console.log(`\n* Found root contract '${rootContract}' - let's compile it:`);
@@ -102,7 +102,7 @@ async function main() {
     let buildErrors: string;
     try {
       buildErrors = child_process.execSync(`func -APS -o build/${contractName}.fif ${rootContract} 2>&1 1>node_modules/.tmpfunc`).toString();
-    } catch (e) {
+    } catch (e: any) {
       buildErrors = e.stdout.toString();
     }
     if (buildErrors.length > 0) {

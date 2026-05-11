@@ -1,13 +1,13 @@
 ;; Tax Jetton Wallet Smart Contract
 ;; Deducts a transfer fee on every outgoing transfer and routes it to the fee collector.
 
-#include "imports/stdlib.fc";
-#include "imports/params.fc";
-#include "imports/constants.fc";
-#include "imports/jetton-utils.fc";
-#include "imports/jetton-utils-tax.fc";
-#include "imports/op-codes.fc";
-#include "imports/utils.fc";
+#include "../imports/stdlib.fc";
+#include "../imports/params.fc";
+#include "../imports/constants.fc";
+#include "../imports/jetton-utils.fc";
+#include "../imports/jetton-utils-tax.fc";
+#include "../imports/op-codes.fc";
+#include "../imports/utils.fc";
 #pragma version >=0.2.0;
 
 {-

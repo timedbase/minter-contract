@@ -11,14 +11,14 @@
 ;;            jetton_wallet_code:^Cell fee_numerator:uint16 fee_denominator:uint16
 ;;            fee_collector:MsgAddress = Storage;
 
-#include "imports/stdlib.fc";
-#include "imports/params.fc";
-#include "imports/constants.fc";
-#include "imports/jetton-utils.fc";
-#include "imports/jetton-utils-tax.fc";
-#include "imports/op-codes.fc";
-#include "imports/utils.fc";
-#include "imports/discovery-params.fc";
+#include "../imports/stdlib.fc";
+#include "../imports/params.fc";
+#include "../imports/constants.fc";
+#include "../imports/jetton-utils.fc";
+#include "../imports/jetton-utils-tax.fc";
+#include "../imports/op-codes.fc";
+#include "../imports/utils.fc";
+#include "../imports/discovery-params.fc";
 #pragma version >=0.2.0;
 
 int op::update_wallet_fees() asm "6 PUSHINT";

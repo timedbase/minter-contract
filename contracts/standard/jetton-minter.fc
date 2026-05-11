@@ -7,13 +7,13 @@
 ;; op::genesis can only be called when total_supply == 0 (enforced on-chain).
 ;; After that the supply is permanently fixed — there is no op::mint.
 
-#include "imports/stdlib.fc";
-#include "imports/params.fc";
-#include "imports/constants.fc";
-#include "imports/jetton-utils.fc";
-#include "imports/op-codes.fc";
-#include "imports/utils.fc";
-#include "imports/discovery-params.fc";
+#include "../imports/stdlib.fc";
+#include "../imports/params.fc";
+#include "../imports/constants.fc";
+#include "../imports/jetton-utils.fc";
+#include "../imports/op-codes.fc";
+#include "../imports/utils.fc";
+#include "../imports/discovery-params.fc";
 #pragma version >=0.2.0;
 
 (int, slice, cell, cell) load_data() inline {
